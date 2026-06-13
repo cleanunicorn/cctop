@@ -27,7 +27,7 @@ type Mode = "list" | "detail" | "filter" | "confirm" | "help";
 
 interface ConfirmAction {
   row: Row;
-  signal: "SIGTERM" | "SIGINT";
+  signal: "SIGTERM";
 }
 
 interface State {
@@ -270,14 +270,6 @@ export async function runApp(opts: AppOptions): Promise<void> {
         const row = selectedRow(displayRows());
         if (row) {
           state.confirm = { row, signal: "SIGTERM" };
-          state.mode = "confirm";
-        }
-        break;
-      }
-      case "i": {
-        const row = selectedRow(displayRows());
-        if (row) {
-          state.confirm = { row, signal: "SIGINT" };
           state.mode = "confirm";
         }
         break;
@@ -611,7 +603,6 @@ export async function runApp(opts: AppOptions): Promise<void> {
       "",
       b("Actions"),
       key("x", "quit selected session (SIGTERM, confirm)"),
-      key("i", "interrupt selected session (SIGINT, confirm)"),
       "",
       b("Exit"),
       key("q / Ctrl-C", "quit cctop"),
@@ -650,12 +641,11 @@ export async function runApp(opts: AppOptions): Promise<void> {
     }
     if (state.mode === "confirm" && state.confirm) {
       const { row, signal } = state.confirm;
-      const verb = signal === "SIGINT" ? "Interrupt" : "Quit";
       const id = sanitizeDisplay(
         row.sessionId ? row.sessionId.slice(0, 8) : `pid ${row.pid}`,
       );
       const project = sanitizeDisplay(shortProject(row.project));
-      return `${YELLOW}${verb} ${project} (${id}) with ${signal}?${RESET}  ${BOLD}${GREEN}y${RESET}es / ${BOLD}${RED}n${RESET}o`;
+      return `${YELLOW}Quit ${project} (${id}) with ${signal}?${RESET}  ${BOLD}${GREEN}y${RESET}es / ${BOLD}${RED}n${RESET}o`;
     }
     if (state.message) {
       return `${state.messageColor}${state.message}${RESET}`;

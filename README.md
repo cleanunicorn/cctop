@@ -68,7 +68,6 @@ While the TUI is running:
 | `/`             | filter sessions (type, `enter` to apply)            |
 | `s`             | cycle the sort column (default, cpu, mem, ctx)      |
 | `x`             | quit the selected session (`SIGTERM`, with confirm) |
-| `i`             | interrupt the selected session (`SIGINT`, confirm)  |
 | `?`             | toggle the help overlay                             |
 | `q` / `Ctrl-C`  | quit cctop                                          |
 
@@ -99,8 +98,7 @@ cctop --json          # machine-readable snapshot
 
 Everything is read locally and `cctop` spawns no processes of its own; the only
 thing it ever does to another process is send a signal — and only when you
-explicitly quit (`x`, `SIGTERM`) or interrupt (`i`, `SIGINT`) a session. It
-correlates three sources:
+explicitly quit (`x`, `SIGTERM`) a session. It correlates three sources:
 
 1. **The process table** — via macOS `libproc` (`bun:ffi`) or Linux `/proc`,
    for PIDs, memory, CPU, uptime, and the parent/child tree.

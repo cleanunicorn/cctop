@@ -15,7 +15,7 @@ an interactive TUI; piped or with `--once`/`--json` it prints one frame.
   `libproc` FFI or Linux `/proc`).
 - **Everything is read-only.** cctop spawns no processes. The *only* thing it
   ever does to another process is send a signal — and only on an explicit user
-  action (`x` → SIGTERM, `i` → SIGINT). Preserve this property.
+  action (`x` → SIGTERM). Preserve this property.
 
 ## Commands
 
@@ -48,7 +48,7 @@ src/collect.ts  session discovery + transcript/sub-agent parsing.
 src/render.ts   pure renderers over rows: buildFrame() (summary/header/groups),
                 renderDetail(), rowKey(); the column table definition lives here
 src/app.ts      interactive runtime: runApp(). AppState, raw-mode input loop,
-                draw(), windowGroups(), the quit/interrupt actions
+                draw(), windowGroups(), the quit action
 src/format.ts   formatting + ANSI helpers (visLen/pad/colors/formatMem/...)
 ```
 
