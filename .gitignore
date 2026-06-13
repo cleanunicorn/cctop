@@ -111,3 +111,10 @@ dist
 
 # TernJS port file
 .tern-port
+
+# Local dev
+bin/
+todo/
+
+# Bun build intermediate left behind by `bun build --compile`
+*.bun-build
