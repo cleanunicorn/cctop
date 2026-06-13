@@ -16,9 +16,15 @@ import {
   statSync,
 } from "node:fs";
 import { homedir } from "node:os";
+import { truncate } from "./format.ts";
 import { cwdOf, listAllProcesses, type Proc } from "./proc.ts";
 
 const CLAUDE_DIR = `${homedir()}/.claude`;
+
+// The last prompt is a preview, not a faithful copy (the detail view shows the
+// transcript path for the real thing). Cap it so a pasted blob can't bloat the
+// row, the per-frame sanitize, or the detail wrap. ~25 lines at 80 cols.
+const PROMPT_MAX = 2048;
 
 export interface SubProc {
   pid: number;
@@ -211,7 +217,8 @@ function noteEntry(details: Details, e: any) {
       }
       text = text.replace(/\s+/g, " ").trim();
       // skip other harness wrappers like <local-command-stdout>
-      if (text && !text.startsWith("<")) details.prompt = text;
+      if (text && !text.startsWith("<"))
+        details.prompt = truncate(text, PROMPT_MAX);
     }
   }
   return Boolean(details.model && details.prompt && details.branch);
