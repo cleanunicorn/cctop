@@ -64,6 +64,12 @@ const cols: Col[] = [
 // so these columns align across both and their widths consider children
 const TREE_COLS = ["pid", "mem", "cpu", "up"];
 
+// In list view a single session must not crowd the others off-screen, so cap
+// how many sub-agent and sub-process rows it shows; the overflow is summarized
+// on one line and the detail view (Enter) still lists every one.
+const MAX_SUBAGENT_ROWS = 8;
+const MAX_CHILD_ROWS = 8;
+
 type Cells = Record<string, string>;
 const safe = (s: string | null | undefined, fallback = "-") =>
   sanitizeDisplay(s ?? fallback);
@@ -260,17 +266,35 @@ export function buildFrame(rows: Row[], termCols: number): Frame {
     return `${DIM}${branch}  ${stats}${RESET}  ${CYAN}${ctx}  ${model}${tail}${RESET}`;
   };
 
+  // a dim summary line that stands in for capped sub-agent/sub-process rows,
+  // glyph in the tree gutter to match the rows it replaces
+  const moreLine = (glyph: string, hidden: number, noun: string) =>
+    `${DIM}${pad(glyph, widths[stateI])}  … +${hidden} more ${noun}${RESET}`;
+
   // each group is a session row, then its live sub-agents (pipe-marked), then
   // its sub-process tree (branch-marked), kept together so truncation never
-  // orphans them
+  // orphans them. Each kind is capped so one busy session can't fill the view.
   const groups: Group[] = view.map((r) => {
     const lines = [sessionLine(r.cells, r.raw)];
-    r.subagents.forEach((a) => {
+
+    const agents = r.subagents.slice(0, MAX_SUBAGENT_ROWS);
+    agents.forEach((a) => {
       lines.push(agentLine(a));
     });
-    r.children.forEach((c, i) => {
-      lines.push(childLine(c, i === r.children.length - 1));
+    if (r.subagents.length > agents.length)
+      lines.push(
+        moreLine("│", r.subagents.length - agents.length, "sub-agents"),
+      );
+
+    const kids = r.children.slice(0, MAX_CHILD_ROWS);
+    const capped = r.children.length > kids.length;
+    kids.forEach((c, i) => {
+      // when capped the overflow line is the closer, so no child gets └─
+      lines.push(childLine(c, !capped && i === kids.length - 1));
     });
+    if (capped)
+      lines.push(moreLine("└─", r.children.length - kids.length, "processes"));
+
     return { key: rowKey(r.raw), lines };
   });
 

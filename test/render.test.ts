@@ -74,6 +74,38 @@ describe("render helpers", () => {
     expect(text).toContain("bun test");
   });
 
+  test("caps sub-agent and sub-process rows in list view; detail shows all", () => {
+    const subagents = Array.from({ length: 12 }, (_, i) => ({
+      model: "claude-haiku-4-5-20251001",
+      ctx: 18_000 - i * 500,
+      activity: `Bash: job ${i + 1}`,
+      uptimeSec: 300 - i * 10,
+    }));
+    const children = Array.from({ length: 11 }, (_, i) => ({
+      pid: 90_000 + i,
+      name: `bash › sleep ${i + 1}`,
+      mem: 1024 * 1024,
+      cpu: 0.1,
+      uptimeSec: 120,
+    }));
+    const row = baseRow({ subagents, children });
+
+    const lines = buildFrame([row], 120).groups[0].lines;
+    const text = stripAnsi(lines.join("\n"));
+    // 1 session + 8 agents + 1 overflow + 8 procs + 1 overflow
+    expect(lines.length).toBe(19);
+    expect(text).toContain("+4 more sub-agents");
+    expect(text).toContain("+3 more processes");
+    // a capped child list is closed by the overflow line, not a real └─ row
+    expect(text).not.toContain("└─  bash");
+
+    const detail = stripAnsi(renderDetail(row, 120).join("\n"));
+    expect(detail).toContain("Sub-agents (12)");
+    expect(detail).toContain("Sub-processes (11)");
+    expect(detail).toContain("Bash: job 12");
+    expect(detail).toContain("bash › sleep 11");
+  });
+
   test("sanitizes untrusted table text while keeping trusted styling", () => {
     const frame = buildFrame(
       [
