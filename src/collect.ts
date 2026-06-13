@@ -120,6 +120,8 @@ function validSession(raw: any, file: string): Session | null {
   };
 }
 
+export const __test = { validSession };
+
 function readSessions(): Map<number, Session> {
   const byPid = new Map<number, Session>();
   let files: string[] = [];

@@ -8,7 +8,7 @@ PREFIX ?= $(HOME)/.local
 
 .DEFAULT_GOAL := help
 
-.PHONY: help deps update run dev build lint clean install uninstall
+.PHONY: help deps update run dev test build lint clean install uninstall
 
 help: ## Show available tasks
 	@grep -hE '^[a-z][a-z-]*:.*## .*$$' $(MAKEFILE_LIST) \
@@ -25,6 +25,9 @@ run: ## Run the interactive TUI (make run ARGS="flux")
 
 dev: ## Run with live reload (make dev ARGS="...")
 	@bun run dev $(ARGS)
+
+test: ## Run tests
+	@bun run test
 
 lint: ## Format and lint with Biome, then type-check with tsc
 	@bun run lint

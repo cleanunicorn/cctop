@@ -9,6 +9,7 @@
   "scripts": {
     "start": "bun cctop.ts",
     "dev": "bun --watch cctop.ts",
+    "test": "bun test",
     "lint": "biome check --write . && tsc --noEmit",
     "build": "mkdir -p bin && bun build cctop.ts --compile --outfile bin/cctop && rm -f .*.bun-build",
     "clean": "rm -rf bin .*.bun-build",
