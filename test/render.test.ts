@@ -51,7 +51,12 @@ describe("render helpers", () => {
             },
           ],
           subagents: [
-            { model: "claude-sonnet-4", ctx: 42_000, activity: "Read" },
+            {
+              model: "claude-sonnet-4",
+              ctx: 42_000,
+              activity: "Read",
+              uptimeSec: 65,
+            },
           ],
         }),
       ],
@@ -91,6 +96,7 @@ describe("render helpers", () => {
               model: "claude-sonnet-4\x1b[2J",
               ctx: 12_000,
               activity: "Read\x1b]52;c;secret\x07file",
+              uptimeSec: 30,
             },
           ],
         }),

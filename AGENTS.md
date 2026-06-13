@@ -121,3 +121,47 @@ transcripts under `<id>/subagents/`.
   registry entry (`~/.claude/sessions/<pid>.json` with `startedAt` ≈ now) with a
   throwaway `sleep 600 &` process, filter to it, `x` → `y`, and confirm the
   sleep process got the signal. Clean up the json + process afterward.
+
+## Spinning up live sub-agents on demand for testing
+
+To exercise the sub-agent rows (the cyan `◆` lines with model, context, and a
+ticking *last action*), park a handful of throwaway agents under the current
+Claude Code session. Each one blocks on foreground shell loops, so it stays
+alive and visibly active for ~10 minutes at near-zero token cost after startup,
+and you can stop any of them on demand.
+
+Launch **5 background agents on Haiku**, each with a name so they're easy to
+tell apart in the tree and to stop individually — `alpha`, `bravo`, `charlie`,
+`delta`, `echo`. Give each the same instruction (swap the name):
+
+> You will make SEVEN Bash tool calls, ONE AT A TIME, in the **foreground** (do
+> NOT set `run_in_background`), and nothing else. Don't touch any files. After
+> each call returns, immediately make the next one. Each call (rounds 1–7) runs
+> this with `timeout: 120000`, swapping the round number R:
+> `for i in $(seq 1 90); do echo "alpha round R $i"; sleep 1; done`
+> Each loop runs ~90 seconds — that's intended; wait for it, then fire the next
+> round. After the 7th call returns, reply with the single word: done
+
+Key points:
+
+- **Several short calls, NOT one long one — this is load-bearing.** A sub-agent
+  has no process of its own; cctop infers liveness purely from its transcript's
+  mtime (`liveSubagents()` in `collect.ts`). A *single* 10-minute foreground
+  call writes one turn and then goes silent on disk, so the row vanishes after
+  `SUBAGENT_BUSY_MS` (3 min) even though the loop is still running. Each *new*
+  Bash call writes a fresh `tool_use` turn, bumping the mtime back inside the
+  window — so ~90s rounds (well under 3 min) keep the `◆` row visible the whole
+  time, and you watch the label tick `round 1` → `round 2` → …
+- **The loop is load-bearing too.** A bare `sleep 90` is hard-blocked by the
+  harness (a standalone leading sleep is refused even with the sandbox off). A
+  `sleep` *inside* a loop that does real work (`echo`) is allowed — that's what
+  keeps the agent parked instead of exiting immediately. Don't "simplify" it
+  back to a plain sleep.
+- **Foreground, not background.** `run_in_background: true` makes the agent fire
+  the command and exit right away (it won't stay visible). The agent must *block*
+  on each call, so it runs in the foreground; the distinct echo per second drives
+  the live last-action display. `120000` (2 min) comfortably covers a 90s loop.
+- **Cost.** Each agent spends its ~12k-token startup plus a cheap Haiku turn per
+  round (7 rounds), then ≈0 while parked inside each loop.
+- **Stop them** with `TaskStop` by task id (all at once, or a subset by name);
+  otherwise they exit themselves after the 7th round (~10–11 min).

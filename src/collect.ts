@@ -38,6 +38,7 @@ export interface SubAgent {
   model: string | null;
   ctx: number | null;
   activity: string | null;
+  uptimeSec: number;
 }
 
 export interface Row {
@@ -429,8 +430,14 @@ function liveSubagents(
   const out: SubAgent[] = [];
   for (const path of listAgentFiles(dir)) {
     let mtimeMs: number;
+    let birthMs: number;
     try {
-      mtimeMs = statSync(path).mtimeMs;
+      const st = statSync(path);
+      mtimeMs = st.mtimeMs;
+      // the transcript is created when the agent starts and only appended to,
+      // so its birthtime is the agent's start; fall back to mtime where the
+      // filesystem has no birthtime (uptime then reads ~0 rather than bogus)
+      birthMs = st.birthtimeMs || st.mtimeMs;
     } catch {
       continue;
     }
@@ -448,6 +455,7 @@ function liveSubagents(
       model: info.model ?? null,
       ctx: info.ctx ?? null,
       activity: info.activity ?? null,
+      uptimeSec: Math.max(0, (nowMs - birthMs) / 1000),
     });
   }
   return out.sort((a, b) => (b.ctx ?? 0) - (a.ctx ?? 0));
