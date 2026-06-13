@@ -21,6 +21,7 @@ import {
   pad,
   RED,
   RESET,
+  sanitizeDisplay,
   shortProject,
   stateDot,
   truncate,
@@ -62,6 +63,8 @@ const cols: Col[] = [
 const TREE_COLS = ["pid", "mem", "cpu", "up"];
 
 type Cells = Record<string, string>;
+const safe = (s: string | null | undefined, fallback = "-") =>
+  sanitizeDisplay(s ?? fallback);
 
 // Paint a session cell: status dot, heat-colored cpu/ctx, dimmed units,
 // dimmed placeholders; everything else as-is.
@@ -108,22 +111,26 @@ export function buildFrame(rows: Row[], termCols: number): Frame {
       up: formatDuration(r.uptimeSec),
       state: r.state,
       ctx: r.contextTokens ? formatTokens(r.contextTokens) : "-",
-      model: r.model?.replace(/^claude-/, "") ?? "-",
-      ver: r.version ?? "-",
-      host: r.host,
-      project: shortProject(r.project),
-      branch: r.branch ?? "-",
+      model: safe(r.model?.replace(/^claude-/, "")),
+      ver: safe(r.version),
+      host: safe(r.host),
+      project: safe(shortProject(r.project)),
+      branch: safe(r.branch),
       last: r.lastMs ? formatDuration((nowMs - r.lastMs) / 1000) : "-",
-      prompt: r.prompt ?? r.sessionName ?? "-",
+      prompt: safe(r.prompt ?? r.sessionName),
     } as Cells,
     children: r.children.map((c) => ({
       pid: String(c.pid),
       mem: formatMem(c.mem),
       cpu: `${c.cpu.toFixed(1)}%`,
       up: formatDuration(c.uptimeSec),
-      name: c.name,
+      name: safe(c.name),
     })),
-    subagents: r.subagents,
+    subagents: r.subagents.map((a) => ({
+      ...a,
+      model: a.model ? safe(a.model) : null,
+      activity: a.activity ? safe(a.activity) : null,
+    })),
   }));
 
   // top-style summary: session counts by state, plus the total CPU,
@@ -269,15 +276,16 @@ export function renderDetail(r: Row, termCols: number): string[] {
 
   const dot = stateDot(r.state);
   const out: string[] = [];
+  const projectShort = safe(shortProject(r.project), "?");
   out.push(
-    `${dot} ${BOLD}${shortProject(r.project)}${RESET}  ${DIM}${r.state}${RESET}`,
+    `${dot} ${BOLD}${projectShort}${RESET}  ${DIM}${safe(r.state)}${RESET}`,
   );
   out.push("");
-  out.push(`${label("session")}${r.sessionId ?? "-"}`);
-  if (r.sessionName) out.push(`${label("name")}${r.sessionName}`);
-  out.push(`${label("pid")}${r.pid}  ${DIM}·${RESET}  ${r.kind ?? "-"}`);
-  out.push(`${label("project")}${r.project ?? "-"}`);
-  out.push(`${label("branch")}${r.branch ?? "-"}`);
+  out.push(`${label("session")}${safe(r.sessionId)}`);
+  if (r.sessionName) out.push(`${label("name")}${safe(r.sessionName)}`);
+  out.push(`${label("pid")}${r.pid}  ${DIM}·${RESET}  ${safe(r.kind)}`);
+  out.push(`${label("project")}${safe(r.project)}`);
+  out.push(`${label("branch")}${safe(r.branch)}`);
   const ctx =
     r.contextTokens != null
       ? (() => {
@@ -287,10 +295,10 @@ export function renderDetail(r: Row, termCols: number): string[] {
         })()
       : "-";
   out.push(
-    `${label("model")}${r.model?.replace(/^claude-/, "") ?? "-"}  ${DIM}·${RESET}  ${ctx} ctx`,
+    `${label("model")}${safe(r.model?.replace(/^claude-/, ""))}  ${DIM}·${RESET}  ${ctx} ctx`,
   );
-  out.push(`${label("version")}${r.version ?? "-"}`);
-  out.push(`${label("host")}${r.host}`);
+  out.push(`${label("version")}${safe(r.version)}`);
+  out.push(`${label("host")}${safe(r.host)}`);
   const cpuC = cpuColor(r.cpu);
   const cpuStr = `${r.cpu.toFixed(1)}%`;
   out.push(
@@ -301,20 +309,20 @@ export function renderDetail(r: Row, termCols: number): string[] {
       r.lastMs ? formatDuration((Date.now() - r.lastMs) / 1000) : "-"
     } ago`,
   );
-  if (r.transcript) out.push(`${label("log")}${r.transcript}`);
+  if (r.transcript) out.push(`${label("log")}${safe(r.transcript)}`);
 
   out.push("");
   out.push(`${BOLD}Prompt${RESET}`);
-  out.push(...wrap(r.prompt ?? r.sessionName ?? "-", 2));
+  out.push(...wrap(safe(r.prompt ?? r.sessionName), 2));
 
   if (r.subagents.length) {
     out.push("");
     out.push(`${BOLD}Sub-agents${RESET} ${DIM}(${r.subagents.length})${RESET}`);
     for (const a of r.subagents) {
-      const model = a.model?.replace(/^claude-/, "") ?? "agent";
+      const model = safe(a.model?.replace(/^claude-/, ""), "agent");
       const ac = a.ctx != null ? formatTokens(a.ctx) : "?";
       const line = `${CYAN}◆${RESET} ${model} · ${ac} ctx${
-        a.activity ? ` · ${a.activity}` : ""
+        a.activity ? ` · ${safe(a.activity)}` : ""
       }`;
       out.push(truncate(line, width + (line.length - visLen(line))));
     }
@@ -336,7 +344,7 @@ export function renderDetail(r: Row, termCols: number): string[] {
         true,
       )}`;
       const room = Math.max(width - stats.length - 3, 8);
-      out.push(`${DIM}${stats}${RESET}  ${truncate(c.name, room)}`);
+      out.push(`${DIM}${stats}${RESET}  ${truncate(safe(c.name), room)}`);
     }
   }
   return out;

@@ -26,6 +26,7 @@
 import pkg from "./package.json";
 import { runApp } from "./src/app.ts";
 import { collectRows } from "./src/collect.ts";
+import { sanitizeDisplay } from "./src/format.ts";
 import { buildFrame } from "./src/render.ts";
 
 export const VERSION = `v${pkg.version}`;
@@ -97,7 +98,8 @@ for (let i = 0; i < args.length; i++) {
 
 // Live only on an interactive terminal; piping, redirecting, --once, or
 // --json all produce a single frame so scripts and `| grep` keep working.
-const live = !once && !asJson && Boolean(process.stdout.isTTY);
+const live =
+  !once && !asJson && Boolean(process.stdout.isTTY && process.stdin.isTTY);
 
 if (asJson) {
   const rows = (await collectRows(filter)).map(({ lastMs, ...row }) => row);
@@ -107,7 +109,7 @@ if (asJson) {
   if (rows.length === 0) {
     console.log(
       filter
-        ? `no Claude Code sessions match "${filter}"`
+        ? `no Claude Code sessions match "${sanitizeDisplay(filter)}"`
         : "no Claude Code sessions running",
     );
   } else {

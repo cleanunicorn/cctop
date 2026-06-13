@@ -17,9 +17,13 @@ export const CYAN = "\x1b[36m";
 
 // Cells carry color codes inline, so width and padding must count only the
 // visible characters, not the escape sequences.
-const ANSI_RE = /\x1b\[[0-9;]*m/g;
+const ANSI_RE =
+  /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])/g;
+const CONTROL_RE = /[\x00-\x1f\x7f-\x9f]/g;
 export const visLen = (s: string) => s.replace(ANSI_RE, "").length;
 export const stripAnsi = (s: string) => s.replace(ANSI_RE, "");
+export const sanitizeDisplay = (s: string) =>
+  s.replace(ANSI_RE, "").replace(CONTROL_RE, " ");
 export const pad = (s: string, w: number, right?: boolean) => {
   const gap = Math.max(0, w - visLen(s));
   return right ? " ".repeat(gap) + s : s + " ".repeat(gap);

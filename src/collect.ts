@@ -39,6 +39,7 @@ export interface Row {
   mem: number;
   cpu: number;
   uptimeSec: number;
+  startSec: number;
   state: string;
   kind: string | null;
   sessionId: string | null;
@@ -81,7 +82,7 @@ interface Session {
   pid: number;
   sessionId: string;
   cwd: string;
-  startedAt?: number;
+  startedAt: number;
   version?: string;
   kind?: string;
   status?: string;
@@ -91,6 +92,34 @@ interface Session {
 
 // ~/.claude/sessions/<pid>.json is written by each running Claude Code:
 // { pid, sessionId, cwd, startedAt, version, kind, status, updatedAt, name }
+function validSession(raw: any, file: string): Session | null {
+  const filePid = Number(file.slice(0, -".json".length));
+  if (
+    !Number.isInteger(filePid) ||
+    raw?.pid !== filePid ||
+    typeof raw.sessionId !== "string" ||
+    raw.sessionId.length === 0 ||
+    typeof raw.cwd !== "string" ||
+    raw.cwd.length === 0 ||
+    !Number.isFinite(raw.startedAt)
+  ) {
+    return null;
+  }
+  const optionalString = (value: unknown) =>
+    typeof value === "string" ? value : undefined;
+  return {
+    pid: raw.pid,
+    sessionId: raw.sessionId,
+    cwd: raw.cwd,
+    startedAt: raw.startedAt,
+    version: optionalString(raw.version),
+    kind: optionalString(raw.kind),
+    status: optionalString(raw.status),
+    updatedAt: Number.isFinite(raw.updatedAt) ? raw.updatedAt : undefined,
+    name: optionalString(raw.name),
+  };
+}
+
 function readSessions(): Map<number, Session> {
   const byPid = new Map<number, Session>();
   let files: string[] = [];
@@ -102,8 +131,11 @@ function readSessions(): Map<number, Session> {
   for (const f of files) {
     if (!f.endsWith(".json")) continue;
     try {
-      const s = JSON.parse(readFileSync(`${CLAUDE_DIR}/sessions/${f}`, "utf8"));
-      if (s?.pid) byPid.set(s.pid, s);
+      const raw = JSON.parse(
+        readFileSync(`${CLAUDE_DIR}/sessions/${f}`, "utf8"),
+      );
+      const s = validSession(raw, f);
+      if (s) byPid.set(s.pid, s);
     } catch {} // partially written entry
   }
   return byPid;
@@ -530,8 +562,14 @@ export async function collectRows(filter: string | null): Promise<Row[]> {
   const seenAgentDirs = new Set<string>();
   const rows = candidates.map((p): Row | null => {
     let s = sessions.get(p.pid) ?? null;
-    // a registry entry older than the process means the PID was reused
-    if (s && p.startSec * 1000 > (s.startedAt ?? Infinity) + 60_000) {
+    // A registry entry whose timestamp does not match the process start means
+    // the PID was reused or the entry is malformed.
+    if (
+      s &&
+      (!p.startSec ||
+        Math.abs(p.startSec * 1000 - s.startedAt) > 60_000 ||
+        s.startedAt > nowMs + 60_000)
+    ) {
       s = null;
     }
     if (!s && !isClaudeProc(p)) return null; // stale entry only
@@ -569,6 +607,7 @@ export async function collectRows(filter: string | null): Promise<Row[]> {
       mem: p.rss,
       cpu: cpuPercent(p, nowMs),
       uptimeSec: p.startSec ? nowMs / 1000 - p.startSec : 0,
+      startSec: p.startSec,
       state: s?.status ?? "?",
       kind: s?.kind ?? null,
       sessionId: s?.sessionId ?? null,

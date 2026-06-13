@@ -15,6 +15,7 @@ import {
   GREEN,
   RED,
   RESET,
+  sanitizeDisplay,
   shortProject,
   truncate,
   visLen,
@@ -116,9 +117,14 @@ export async function runApp(opts: AppOptions): Promise<void> {
   process.on("SIGTERM", quit);
 
   // --- selection helpers ---------------------------------------------------
+  const activeFilter = () =>
+    state.mode === "filter"
+      ? state.filterInput.toLowerCase() || null
+      : state.filter;
+
   const displayRows = (): Row[] =>
     state.rows
-      .filter((r) => matchRow(r, state.filter))
+      .filter((r) => matchRow(r, activeFilter()))
       .sort(SORTS[state.sortIndex].cmp);
 
   const selectedRow = (rows: Row[]): Row | null => {
@@ -182,12 +188,32 @@ export async function runApp(opts: AppOptions): Promise<void> {
   };
 
   // --- actions -------------------------------------------------------------
-  const doQuit = (action: ConfirmAction) => {
+  const sameSignalTarget = (a: Row, b: Row) =>
+    a.pid === b.pid && rowKey(a) === rowKey(b) && a.startSec === b.startSec;
+
+  const doQuit = async (action: ConfirmAction) => {
     const { row, signal } = action;
+    let rows: Row[];
     try {
-      process.kill(row.pid, signal);
+      rows = await collectRows(null);
+    } catch (e: any) {
       flash(
-        `sent ${signal} to ${row.pid} (${shortProject(row.project)})`,
+        `could not refresh sessions: ${sanitizeDisplay(e?.message ?? "failed")}`,
+        RED,
+      );
+      return;
+    }
+    state.rows = rows;
+    const current = rows.find((r) => sameSignalTarget(r, row));
+    if (!current) {
+      const id = row.sessionId ? row.sessionId.slice(0, 8) : `pid ${row.pid}`;
+      flash(`session ${sanitizeDisplay(id)} is no longer running`, YELLOW);
+      return;
+    }
+    try {
+      process.kill(current.pid, signal);
+      flash(
+        `sent ${signal} to ${current.pid} (${sanitizeDisplay(shortProject(current.project))})`,
         GREEN,
       );
     } catch (e: any) {
@@ -196,8 +222,8 @@ export async function runApp(opts: AppOptions): Promise<void> {
           ? "already gone"
           : e?.code === "EPERM"
             ? "permission denied"
-            : (e?.message ?? "failed");
-      flash(`could not signal ${row.pid}: ${why}`, RED);
+            : sanitizeDisplay(e?.message ?? "failed");
+      flash(`could not signal ${current.pid}: ${why}`, RED);
     }
   };
 
@@ -303,23 +329,23 @@ export async function runApp(opts: AppOptions): Promise<void> {
       state.filter = state.filterInput.toLowerCase() || null;
       state.mode = "list";
     } else if (k === "escape") {
-      state.mode = "list"; // keep whatever filter was active before
+      state.filterInput = "";
+      state.mode = "list";
     } else if (k === "backspace") {
       state.filterInput = state.filterInput.slice(0, -1);
-      state.filter = state.filterInput.toLowerCase() || null;
     } else if (k.length === 1 && k >= " " && k !== "\x7f") {
       state.filterInput += k;
-      state.filter = state.filterInput.toLowerCase() || null;
     }
     reconcile(displayRows());
     draw();
   };
 
-  const onConfirmKey = (k: string) => {
+  const onConfirmKey = async (k: string) => {
     if (k === "y" || k === "Y") {
-      if (state.confirm) doQuit(state.confirm);
+      const action = state.confirm;
       state.confirm = null;
       state.mode = "list";
+      if (action) await doQuit(action);
     } else if (k === "n" || k === "N" || k === "escape" || k === "q") {
       state.confirm = null;
       state.mode = "list";
@@ -425,7 +451,7 @@ export async function runApp(opts: AppOptions): Promise<void> {
           onFilterKey(k);
           break;
         case "confirm":
-          onConfirmKey(k);
+          void onConfirmKey(k);
           break;
         case "help":
           onHelpKey(k);
@@ -486,8 +512,9 @@ export async function runApp(opts: AppOptions): Promise<void> {
     );
 
     if (!rows.length) {
-      const msg = state.filter
-        ? `no Claude Code sessions match "${state.filter}"`
+      const filter = activeFilter();
+      const msg = filter
+        ? `no Claude Code sessions match "${sanitizeDisplay(filter)}"`
         : "no Claude Code sessions running";
       const body = [`${DIM}${msg}${RESET}`, ...Array(region - 1).fill("")];
       return [
@@ -617,15 +644,18 @@ export async function runApp(opts: AppOptions): Promise<void> {
     if (state.mode === "filter") {
       const cursor = `${CYAN}▏${RESET}`;
       return truncate(
-        `${BOLD}/${RESET}${state.filterInput}${cursor}  ${DIM}enter apply · esc cancel${RESET}`,
+        `${BOLD}/${RESET}${sanitizeDisplay(state.filterInput)}${cursor}  ${DIM}enter apply · esc cancel${RESET}`,
         cols + 999, // keep ANSI; filter input is short
       );
     }
     if (state.mode === "confirm" && state.confirm) {
       const { row, signal } = state.confirm;
       const verb = signal === "SIGINT" ? "Interrupt" : "Quit";
-      const id = row.sessionId ? row.sessionId.slice(0, 8) : `pid ${row.pid}`;
-      return `${YELLOW}${verb} ${shortProject(row.project)} (${id}) with ${signal}?${RESET}  ${BOLD}${GREEN}y${RESET}es / ${BOLD}${RED}n${RESET}o`;
+      const id = sanitizeDisplay(
+        row.sessionId ? row.sessionId.slice(0, 8) : `pid ${row.pid}`,
+      );
+      const project = sanitizeDisplay(shortProject(row.project));
+      return `${YELLOW}${verb} ${project} (${id}) with ${signal}?${RESET}  ${BOLD}${GREEN}y${RESET}es / ${BOLD}${RED}n${RESET}o`;
     }
     if (state.message) {
       return `${state.messageColor}${state.message}${RESET}`;
