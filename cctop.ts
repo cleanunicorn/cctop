@@ -1,0 +1,126 @@
+#!/usr/bin/env bun
+
+// Copyright 2026 Stefan Prodan.
+// SPDX-License-Identifier: Apache-2.0
+//
+// cctop - an interactive top-style monitor for running Claude Code sessions:
+// process stats (memory, CPU, uptime), busy/idle state, context size, model,
+// the app hosting the session (terminal or IDE), project directory, git branch,
+// and the last user prompt. Each session's sub-processes (the running tool
+// command, MCP servers, LSPs) are listed as a tree beneath it, with their own
+// memory and CPU; a tool's wrapping shell is skipped so the real command shows.
+// Live sub-agents (Task / Workflow) appear as in-process rows. Useful when many
+// sessions run at once in different shells and IDEs.
+//
+// Data sources, all local and read-only, no subprocesses:
+//
+//   1. The process table: macOS libproc via bun:ffi, or /proc on Linux.
+//   2. ~/.claude/sessions/<pid>.json: the per-process session registry.
+//   3. The session transcript ~/.claude/projects/<dir>/<id>.jsonl: only the
+//      tail is read, for the model, context tokens, git branch, last prompt.
+//
+// On an interactive terminal it runs as a live TUI with keyboard navigation,
+// a per-session detail view, and actions (quit a session); when piped,
+// redirected, or run with --once it prints a single frame and exits.
+
+import pkg from "./package.json";
+import { runApp } from "./src/app.ts";
+import { collectRows } from "./src/collect.ts";
+import { buildFrame } from "./src/render.ts";
+
+export const VERSION = `v${pkg.version}`;
+
+const HELP = `\x1b[1mcctop\x1b[0m - monitor running Claude Code sessions
+
+\x1b[1mUsage:\x1b[0m
+  cctop [filter] [options]
+
+\x1b[1mArguments:\x1b[0m
+  filter                 only show sessions whose project, host, branch,
+                         model, or session id contains this
+
+\x1b[1mOptions:\x1b[0m
+  -w, --watch[=seconds]  set the refresh interval (default: 2s)
+  --once                 render once and exit (default when piped)
+  --json                 print full session details as JSON
+  -v, --version          show version
+  -h, --help             show this help
+
+Runs as an interactive TUI on a terminal; prints once when piped or --once.
+
+\x1b[1mKeys (interactive):\x1b[0m
+  ↑/k ↓/j  move      enter  detail     /  filter    s  sort
+  x        quit session (confirm)      ?  help      q  quit cctop
+
+\x1b[1mExamples:\x1b[0m
+  cctop                  # live TUI
+  cctop flux-operator    # only sessions matching "flux-operator"
+  cctop --watch=1        # refresh every second
+  cctop --once           # single frame
+  cctop --json           # machine-readable snapshot`;
+
+function fail(message: string): never {
+  console.error(`error: ${message}\n\n${HELP}`);
+  process.exit(1);
+}
+
+let filter: string | null = null;
+let watchSecs = 2; // refresh interval; live by default on a terminal
+let once = false; // force a single frame and exit
+let asJson = false;
+const args = Bun.argv.slice(2);
+for (let i = 0; i < args.length; i++) {
+  const arg = args[i];
+  if (arg === "-h" || arg === "--help") {
+    console.log(HELP);
+    process.exit(0);
+  } else if (arg === "-v" || arg === "--version") {
+    console.log(VERSION);
+    process.exit(0);
+  } else if (arg === "--once") {
+    once = true;
+  } else if (arg === "-w" || arg === "--watch") {
+    // interval already defaults to 2s; flag is accepted for clarity
+  } else if (arg.startsWith("--watch=")) {
+    watchSecs = Number(arg.slice(8));
+    if (!(watchSecs > 0)) fail(`invalid watch interval: ${arg.slice(8)}`);
+  } else if (arg === "--json") {
+    asJson = true;
+  } else if (arg.startsWith("-")) {
+    fail(`unknown option: ${arg}`);
+  } else if (filter === null) {
+    filter = arg.toLowerCase();
+  } else {
+    fail(`unexpected argument: ${arg} (filter is already "${filter}")`);
+  }
+}
+
+// Live only on an interactive terminal; piping, redirecting, --once, or
+// --json all produce a single frame so scripts and `| grep` keep working.
+const live = !once && !asJson && Boolean(process.stdout.isTTY);
+
+if (asJson) {
+  const rows = (await collectRows(filter)).map(({ lastMs, ...row }) => row);
+  console.log(JSON.stringify(rows, null, 2));
+} else if (!live) {
+  const rows = await collectRows(filter);
+  if (rows.length === 0) {
+    console.log(
+      filter
+        ? `no Claude Code sessions match "${filter}"`
+        : "no Claude Code sessions running",
+    );
+  } else {
+    const frame = buildFrame(rows, process.stdout.columns ?? 200);
+    console.log(
+      [
+        ...frame.summary,
+        "",
+        frame.header,
+        ...frame.groups.flatMap((g) => g.lines),
+      ].join("\n"),
+    );
+  }
+} else {
+  await runApp({ filter, watchSecs, version: VERSION });
+}
