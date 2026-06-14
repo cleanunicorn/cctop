@@ -16,6 +16,10 @@ an interactive TUI; piped or with `--once`/`--json` it prints one frame.
 - **Everything is read-only.** cctop spawns no processes. The *only* thing it
   ever does to another process is send a signal — and only on an explicit user
   action (`x` → SIGTERM). Preserve this property.
+- **Zero runtime dependencies.** cctop imports only Bun and OS built-ins
+  (`bun:ffi`, `node:fs`, …); `package.json` has an empty `dependencies` (the
+  devDependencies are just Biome/tsc/types). Do not add npm packages — keep it
+  dependency-free.
 
 ## Commands
 

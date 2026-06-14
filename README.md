@@ -23,6 +23,8 @@ waiting for input.
 - **Quit a runaway session** in place (`x` → `SIGTERM`, with confirm).
 - **Read-only and local** — reads only `~/.claude` and the process table, spawns
   no processes, and only ever signals one when you explicitly quit it.
+- **Zero dependencies** — a single Bun/TypeScript program with no npm packages;
+  it uses only Bun and OS built-ins.
 
 ## Requirements
 
@@ -103,8 +105,8 @@ cctop --json       # machine-readable snapshot
 ## Contributing
 
 `cctop` is open source and contributions are welcome — open an issue or send a
-pull request on [GitHub](https://github.com/stefanprodan/cctop).
-See [AGENTS.md](AGENTS.md) for the architecture, data sources, and how to run the checks.
+pull request on [GitHub](https://github.com/stefanprodan/cctop). See
+[docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) to get set up.
 
 ## License
 
