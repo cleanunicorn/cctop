@@ -127,7 +127,16 @@ function validSession(raw: any, file: string): Session | null {
   };
 }
 
-export const __test = { validSession };
+// Exported for tests only: the transcript/registry parsers are the pieces most
+// exposed to Claude Code's undocumented on-disk formats, so they get covered
+// directly. Not part of the public API.
+export const __test = {
+  validSession,
+  noteEntry,
+  describeAssistant,
+  transcriptDetails,
+  agentContext,
+};
 
 function readSessions(): Map<number, Session> {
   const byPid = new Map<number, Session>();
