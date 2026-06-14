@@ -66,22 +66,17 @@ export function shortProject(cwd: string | null) {
   return cwd.split("/").filter(Boolean).at(-1) ?? cwd;
 }
 
-// busy/idle/waiting each get a color: green working, yellow on a tool, red
-// waiting on you, dim unknown
+// Only one distinction matters at a glance: Claude is actively working (busy,
+// green) or it isn't and may want you (idle, waiting, in a shell, compacting —
+// all red). Claude Code coins new statuses over time, so anything that isn't
+// "busy" is treated as not-busy rather than enumerated. A live process whose
+// status we can't read yet ("?") stays dim — red there would cry wolf.
 const stateColor = (state: string) =>
-  state === "busy"
-    ? BRIGHT_GREEN
-    : state === "waiting"
-      ? YELLOW
-      : state === "idle"
-        ? RED
-        : DIM;
+  state === "busy" ? BRIGHT_GREEN : state === "?" ? DIM : RED;
 
-// busy/idle shown as a status dot rather than a word
+// the state as a status dot rather than a word; "·" only for the unknown state
 export const stateDot = (state: string) =>
-  state === "busy" || state === "waiting" || state === "idle"
-    ? `${stateColor(state)}●${RESET}`
-    : `${DIM}·${RESET}`;
+  state === "?" ? `${DIM}·${RESET}` : `${stateColor(state)}●${RESET}`;
 
 // the state as a colored word, for places that show it spelled out
 export const stateWord = (state: string) =>

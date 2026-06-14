@@ -21,7 +21,6 @@ import {
   stripAnsi,
   truncate,
   visLen,
-  YELLOW,
 } from "../src/format.ts";
 
 describe("format helpers", () => {
@@ -70,17 +69,20 @@ describe("format helpers", () => {
     expect(truncate("hello", 1)).toBe("h");
   });
 
-  test("colors session state as a word per status", () => {
+  test("colors session state green when busy, red for any other known state", () => {
     expect(stateWord("busy")).toBe(`${BRIGHT_GREEN}busy${RESET}`);
-    expect(stateWord("waiting")).toBe(`${YELLOW}waiting${RESET}`);
+    expect(stateWord("waiting")).toBe(`${RED}waiting${RESET}`);
     expect(stateWord("idle")).toBe(`${RED}idle${RESET}`);
+    // statuses cctop has never seen still get a red dot, not a blank gutter
+    expect(stateWord("shell")).toBe(`${RED}shell${RESET}`);
     expect(stateWord("?")).toBe(`${DIM}?${RESET}`);
   });
 
-  test("renders a status dot, dim for unknown state", () => {
+  test("renders a status dot, green busy, red otherwise, dim when unknown", () => {
     expect(stateDot("busy")).toBe(`${BRIGHT_GREEN}●${RESET}`);
-    expect(stateDot("waiting")).toBe(`${YELLOW}●${RESET}`);
+    expect(stateDot("waiting")).toBe(`${RED}●${RESET}`);
     expect(stateDot("idle")).toBe(`${RED}●${RESET}`);
+    expect(stateDot("shell")).toBe(`${RED}●${RESET}`);
     expect(stateDot("?")).toBe(`${DIM}·${RESET}`);
   });
 

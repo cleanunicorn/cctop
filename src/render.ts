@@ -27,7 +27,6 @@ import {
   stateWord,
   truncate,
   visLen,
-  YELLOW,
 } from "./format.ts";
 
 // A stable identity for a session row that survives re-sorting across
@@ -151,16 +150,14 @@ export function buildFrame(rows: Row[], termCols: number): Frame {
   // top-style summary: session counts by state, plus the total CPU,
   // memory, and sub-process footprint of Claude (sessions and children)
   let busy = 0;
-  let waiting = 0;
-  let idle = 0;
+  let idle = 0; // everything not busy with a known status (idle/waiting/shell/…)
   let totalCpu = 0;
   let totalMem = 0;
   let totalProcs = 0;
   let totalAgents = 0;
   for (const { raw } of view) {
     if (raw.state === "busy") busy++;
-    else if (raw.state === "waiting") waiting++;
-    else if (raw.state === "idle") idle++;
+    else if (raw.state !== "?") idle++;
     totalCpu += raw.cpu;
     totalMem += raw.mem;
     totalProcs += 1 + raw.children.length; // the session plus its children
@@ -172,7 +169,6 @@ export function buildFrame(rows: Row[], termCols: number): Frame {
   }
   const states: string[] = [];
   if (busy) states.push(`${BRIGHT_GREEN}●${RESET} ${busy} busy`);
-  if (waiting) states.push(`${YELLOW}●${RESET} ${waiting} waiting`);
   if (idle) states.push(`${RED}●${RESET} ${idle} idle`);
   const summary = [
     `${DIM}Sessions:${RESET} ${states.join("  ") || view.length}` +
