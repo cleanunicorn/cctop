@@ -61,6 +61,13 @@ session registry `sessions/<pid>.json`; and each session's transcript
 `projects/<dir>/<id>.jsonl` (tail only, cached by mtime) plus sub-agent
 transcripts under `<id>/subagents/`.
 
+The `HOST` column is resolved by walking each session's process ancestry past
+shells and wrappers to the first app bundle or recognizable program (iTerm,
+Ghostty, VS Code, a JetBrains IDE, tmux, sshd…); see `HOST_SKIP` in `collect.ts`.
+Sub-process rows skip a tool's wrapping shell so the real command shows
+(`bash › go test`). Live sub-agents (`Task`/`Workflow`) run in-process, so they
+never hit the process table — they are read from the `subagents/` transcripts.
+
 ## Critical gotchas — read before editing
 
 1. **Transcript reads MUST stay synchronous (`node:fs`), not `Bun.file`.**
