@@ -136,6 +136,9 @@ export const __test = {
   describeAssistant,
   transcriptDetails,
   agentContext,
+  liveSubagents,
+  hostApp,
+  cpuPercent,
 };
 
 function readSessions(): Map<number, Session> {

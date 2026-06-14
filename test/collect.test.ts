@@ -2,10 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { __test, matchRow, type Row } from "../src/collect.ts";
+import type { Proc } from "../src/proc.ts";
 
 // A JSONL transcript on disk: one JSON value per line, as Claude Code writes it.
 const jsonl = (entries: unknown[]) =>
@@ -413,6 +420,29 @@ describe("transcript file scanning", () => {
     expect(d.prompt).toBe("the very first prompt");
   });
 
+  test("reassembles a single line longer than two read chunks", () => {
+    // One assistant turn ~700 KiB — wider than two 256 KiB chunks — so the
+    // backward scan hits a chunk with no newline at all and must carry the
+    // whole block forward until the line is reassembled at the file start.
+    const huge = "y".repeat(700 * 1024);
+    const path = write(
+      "huge-line.jsonl",
+      jsonl([
+        user("small far-back prompt"),
+        assistant(
+          "claude-opus-4",
+          { input_tokens: 9 },
+          [{ type: "text", text: huge }],
+          { gitBranch: "main" },
+        ),
+      ]),
+    );
+    const d = __test.transcriptDetails(path);
+    expect(d.model).toBe("claude-opus-4");
+    expect(d.branch).toBe("main");
+    expect(d.prompt).toBe("small far-back prompt");
+  });
+
   test("reads agent model, context, activity, and running state", () => {
     const path = write(
       "agent-1.jsonl",
@@ -444,5 +474,178 @@ describe("transcript file scanning", () => {
     const ctx = __test.agentContext(path);
     expect(ctx.activity).toBe("all done");
     expect(ctx.running).toBe(false);
+  });
+});
+
+// liveSubagents decides which sub-agent transcripts count as running, from
+// their on-disk mtime: written very recently (< 20s) is live; quiet but
+// mid-tool-call (< 180s) is live; quiet and finished is done; past 180s is
+// gone. Backed by temp agent files whose mtimes we set explicitly.
+describe("sub-agent liveness", () => {
+  let dir: string;
+  const now = 1_700_000_000_000; // fixed clock; mtimes are set relative to it
+
+  // Write an agent transcript and stamp its mtime `ageMs` before `now`.
+  const agentFile = (name: string, ageMs: number, entries: unknown[]) => {
+    const subdir = join(dir, "session", "subagents");
+    mkdirSync(subdir, { recursive: true });
+    const path = join(subdir, name);
+    writeFileSync(path, jsonl(entries));
+    const t = new Date(now - ageMs);
+    utimesSync(path, t, t);
+    return path;
+  };
+
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), "cctop-agents-"));
+  });
+  afterAll(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const transcript = () => join(dir, "session.jsonl");
+  const toolTurn = (cmd: string) =>
+    assistant("claude-haiku-4", { input_tokens: 5 }, [
+      { type: "tool_use", name: "Bash", input: { command: cmd } },
+    ]);
+  const textTurn = (text: string) =>
+    assistant("claude-haiku-4", { input_tokens: 5 }, [{ type: "text", text }]);
+
+  test("includes fresh and mid-tool-call agents, drops the rest", () => {
+    // fresh: quiet only 5s, finished — live anyway (inside the 20s window)
+    agentFile("agent-fresh.jsonl", 5_000, [
+      assistant("claude-opus-4", { input_tokens: 900 }, [
+        { type: "text", text: "wrapped up" },
+      ]),
+    ]);
+    // busy: quiet 60s but last turn is a tool call awaiting its result — live
+    agentFile("agent-busy.jsonl", 60_000, [toolTurn("go test ./...")]);
+    // quiet: 60s and finished (text-only) — past the live window, dropped
+    agentFile("agent-quiet.jsonl", 60_000, [textTurn("done thinking")]);
+    // gone: 300s — past the 180s busy cap, dropped before the running check
+    agentFile("agent-gone.jsonl", 300_000, [toolTurn("sleep 1")]);
+
+    const seen = new Set<string>();
+    const agents = __test.liveSubagents(transcript(), now, seen, new Set());
+
+    // only the fresh (ctx 900) and busy (ctx 5) agents survive, ctx-sorted
+    expect(agents.map((a) => a.model)).toEqual([
+      "claude-opus-4",
+      "claude-haiku-4",
+    ]);
+    expect(agents.map((a) => a.activity)).toEqual([
+      "wrapped up",
+      "Bash: go test ./...",
+    ]);
+    // fresh, busy, and quiet are all within the busy cap, so all three are
+    // marked seen (cache retention); only the 300s-gone agent is excluded
+    expect(seen.size).toBe(3);
+  });
+
+  test("lists a subagents directory only once across sessions", () => {
+    agentFile("agent-dup.jsonl", 1_000, [textTurn("hi")]);
+    const seenDirs = new Set<string>();
+    expect(
+      __test.liveSubagents(transcript(), now, new Set(), seenDirs).length,
+    ).toBeGreaterThan(0);
+    // a second session falling back to the same transcript sees nothing
+    expect(
+      __test.liveSubagents(transcript(), now, new Set(), seenDirs),
+    ).toEqual([]);
+  });
+
+  test("returns nothing without a transcript", () => {
+    expect(__test.liveSubagents(null, now, new Set(), new Set())).toEqual([]);
+  });
+});
+
+// hostApp walks a process's ancestry past shells and wrappers to the program
+// that hosts the session: an app bundle, tmux, ssh, or the first real command.
+describe("host resolution", () => {
+  const proc = (over: Partial<Proc>): Proc => ({
+    pid: 0,
+    ppid: 0,
+    rss: 0,
+    cpuSec: 0,
+    startSec: 0,
+    path: null,
+    name: "claude",
+    ...over,
+  });
+  const tree = (procs: Proc[]) => new Map(procs.map((p) => [p.pid, p]));
+
+  test("resolves a macOS app bundle ancestor", () => {
+    const claude = proc({ pid: 10, ppid: 11 });
+    const shell = proc({ pid: 11, ppid: 12, name: "zsh" });
+    const term = proc({
+      pid: 12,
+      ppid: 1,
+      name: "Ghostty",
+      path: "/Applications/Ghostty.app/Contents/MacOS/ghostty",
+    });
+    expect(__test.hostApp(claude, tree([claude, shell, term]))).toBe("Ghostty");
+  });
+
+  test("recognizes tmux and ssh by process name", () => {
+    const claude = proc({ pid: 20, ppid: 21 });
+    const tmux = proc({ pid: 21, ppid: 1, name: "tmux: server" });
+    expect(__test.hostApp(claude, tree([claude, tmux]))).toBe("tmux");
+
+    const claude2 = proc({ pid: 30, ppid: 31 });
+    const sshd = proc({ pid: 31, ppid: 1, name: "sshd-session" });
+    expect(__test.hostApp(claude2, tree([claude2, sshd]))).toBe("ssh");
+  });
+
+  test("skips known wrappers and stops at the first real program", () => {
+    const claude = proc({ pid: 40, ppid: 41 });
+    const sh = proc({ pid: 41, ppid: 42, name: "bash" });
+    const env = proc({ pid: 42, ppid: 43, name: "env" });
+    const node = proc({ pid: 43, ppid: 1, name: "node" });
+    expect(__test.hostApp(claude, tree([claude, sh, env, node]))).toBe("node");
+  });
+
+  test("returns '?' when the ancestry runs out", () => {
+    const orphan = proc({ pid: 50, ppid: 1 });
+    expect(__test.hostApp(orphan, tree([orphan]))).toBe("?");
+  });
+});
+
+// cpuPercent is top-style: the delta between two samples once it has a prior,
+// or the lifetime average on the first sample. PID reuse can make the counter
+// go backwards, which must clamp to 0 rather than report a negative spike.
+describe("cpu sampling", () => {
+  const proc = (pid: number, cpuSec: number, startSec: number): Proc => ({
+    pid,
+    ppid: 1,
+    rss: 0,
+    cpuSec,
+    startSec,
+    path: null,
+    name: "claude",
+  });
+
+  test("first sample is the lifetime average", () => {
+    const now = 1_700_000_000_000;
+    // 5 CPU-seconds over a 10s lifetime -> 50%
+    const cpu = __test.cpuPercent(proc(60_001, 5, now / 1000 - 10), now);
+    expect(cpu).toBeCloseTo(50, 5);
+  });
+
+  test("second sample is the delta against the previous", () => {
+    const pid = 60_002;
+    const t0 = 1_700_000_000_000;
+    __test.cpuPercent(proc(pid, 0, t0 / 1000 - 100), t0); // seed
+    // +1 CPU-second over a 2s wall-clock gap -> 50%
+    const cpu = __test.cpuPercent(proc(pid, 1, t0 / 1000 - 100), t0 + 2000);
+    expect(cpu).toBeCloseTo(50, 5);
+  });
+
+  test("clamps a backwards counter (PID reuse) to zero", () => {
+    const pid = 60_003;
+    const t0 = 1_700_000_000_000;
+    __test.cpuPercent(proc(pid, 50, t0 / 1000 - 100), t0); // seed high
+    // the PID is reused: cpuSec resets lower, so the delta is negative
+    const cpu = __test.cpuPercent(proc(pid, 1, t0 / 1000 - 1), t0 + 2000);
+    expect(cpu).toBe(0);
   });
 });
