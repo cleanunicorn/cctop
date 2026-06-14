@@ -1,24 +1,28 @@
 # cctop
 
-Interactive `top`-style monitor for Claude Code sessions.
-
-`cctop` shows every Claude Code session running on your machine in one place:
-its process stats, busy/idle state, context size, model, the app hosting it
-(terminal or IDE), project, git branch, and last prompt — plus a tree of the
-sub-processes (and live sub-agents) each session has spawned. Handy when you
-have many sessions going at once across different shells and IDEs.
-
-On a terminal it runs as a live TUI: navigate sessions with the keyboard, open
-a per-session detail view, filter and sort on the fly, and quit a runaway
-session without leaving the screen.
+Interactive `top`-style monitor for Claude Code sessions. Know at a glance what
+Claude is working on, how much context it has left, and which sessions are
+waiting for input.
 
 <p align="center">
   <img src="docs/screens/cctop-tui.png" alt="cctop">
 </p>
 
-The selected session is marked with a blue bar; busy sessions are green and
-idle ones red, and CPU and context warm toward red as they climb. Sub-processes
-and live sub-agents are listed beneath each session.
+## Features
+
+- **All your sessions at a glance** — every running Claude Code session in one
+  table: process stats (PID, memory, CPU, uptime), busy/idle state, context
+  size, model, host app (terminal or IDE), project, git branch, and last prompt.
+- **Process & sub-agent tree** — each session's sub-processes and live
+  sub-agents are listed beneath it.
+- **Live TUI** — navigate with the keyboard, open a per-session detail view, and
+  filter and sort on the fly; piped or run with `--once`/`--json` it prints a
+  single frame, so `cctop --json | jq` works.
+- **Status at a glance** — busy sessions are green, idle red; CPU and context
+  heat toward red as they climb; the selected session is marked with a blue bar.
+- **Quit a runaway session** in place (`x` → `SIGTERM`, with confirm).
+- **Read-only and local** — reads only `~/.claude` and the process table, spawns
+  no processes, and only ever signals one when you explicitly quit it.
 
 ## Requirements
 
@@ -95,10 +99,6 @@ cctop --watch=1    # refresh every second
 cctop --once       # single frame, then exit
 cctop --json       # machine-readable snapshot
 ```
-
-Everything is read locally from `~/.claude` and the process table; `cctop`
-spawns no processes of its own, and the only thing it ever does to another
-process is send a signal — and only when you explicitly quit a session (`x`).
 
 ## Contributing
 
