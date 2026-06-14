@@ -176,9 +176,10 @@ export function buildFrame(rows: Row[], termCols: number): Frame {
   const summary = [
     `${DIM}Sessions:${RESET} ${states.join("  ") || view.length}` +
       (totalAgents ? `   ${CYAN}◆${RESET} ${totalAgents} subagents` : ""),
-    `${DIM}Resources:${RESET} cpu ${totalCpu.toFixed(1)}%  mem ${formatMem(
+    // value-first ("1.8% cpu") to match the Sessions line's "1 busy" style
+    `${DIM}Resources:${RESET} ${totalCpu.toFixed(1)}% cpu  ${formatMem(
       totalMem,
-    )}  procs ${totalProcs}`,
+    )} mem  ${totalProcs} procs`,
   ];
 
   // widths use the plain cell text (color is added afterward); the state
