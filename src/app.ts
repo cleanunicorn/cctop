@@ -66,6 +66,7 @@ const SORTS: SortMode[] = [
     cmp: (a, b) =>
       (b.contextTokens ?? 0) - (a.contextTokens ?? 0) || a.pid - b.pid,
   },
+  { name: "pid", cmp: (a, b) => a.pid - b.pid },
 ];
 
 const SELBAR = `${CYAN}▌${RESET} `; // left bar marking the selected group
@@ -598,7 +599,7 @@ export async function runApp(opts: AppOptions): Promise<void> {
       "",
       b("View"),
       key("/", "filter sessions (type, enter to apply)"),
-      key("s", "cycle sort (default, cpu, mem, ctx)"),
+      key("s", "cycle sort (default, cpu, mem, ctx, pid)"),
       key("?", "toggle this help"),
       "",
       b("Actions"),
