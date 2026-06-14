@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, expect, test } from "bun:test";
+import { homedir } from "node:os";
 import {
   BOLD,
   BRIGHT_GREEN,
@@ -19,6 +20,7 @@ import {
   stateDot,
   stateWord,
   stripAnsi,
+  tildePath,
   truncate,
   visLen,
 } from "../src/format.ts";
@@ -48,6 +50,14 @@ describe("format helpers", () => {
     expect(shortProject(null)).toBe("?");
     expect(shortProject("/Users/alice/src/cctop")).toBe("cctop");
     expect(shortProject("/")).toBe("/");
+  });
+
+  test("abbreviates the home root to ~", () => {
+    const home = homedir();
+    expect(tildePath(home)).toBe("~");
+    expect(tildePath(`${home}/go/src/cctop`)).toBe("~/go/src/cctop");
+    expect(tildePath("/etc/hosts")).toBe("/etc/hosts");
+    expect(tildePath(`${home}-other/x`)).toBe(`${home}-other/x`);
   });
 
   test("counts and pads visible width without trusted ANSI styling", () => {

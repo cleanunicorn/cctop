@@ -25,6 +25,7 @@ import {
   shortProject,
   stateDot,
   stateWord,
+  tildePath,
   truncate,
   visLen,
 } from "./format.ts";
@@ -345,12 +346,18 @@ export function renderDetail(r: Row, termCols: number): string[] {
   const projectShort = safe(shortProject(r.project), "?");
   out.push(`${dot} ${BOLD}${projectShort}${RESET}`);
   out.push("");
-  out.push(`${label("state")}${stateWord(safe(r.state))}`);
   out.push(`${label("session")}${safe(r.sessionId)}`);
-  if (r.sessionName) out.push(`${label("name")}${safe(r.sessionName)}`);
+  out.push(`${label("uptime")}${formatDuration(r.uptimeSec)}`);
+  const ago = r.lastMs ? formatDuration((Date.now() - r.lastMs) / 1000) : "-";
+  out.push(
+    `${label("state")}${stateWord(safe(r.state))}  ${DIM}·${RESET}  last turn ${ago} ago`,
+  );
   out.push(`${label("pid")}${r.pid}  ${DIM}·${RESET}  ${safe(r.kind)}`);
-  out.push(`${label("project")}${safe(r.project)}`);
-  out.push(`${label("branch")}${safe(r.branch)}`);
+  const cpuC = cpuColor(r.cpu);
+  const cpuStr = `${r.cpu.toFixed(1)}%`;
+  out.push(
+    `${label("cpu/mem")}${cpuC ? heatNum(cpuStr, cpuC) : cpuStr}  ${DIM}·${RESET}  ${formatMem(r.mem)}`,
+  );
   const ctx =
     r.contextTokens != null
       ? (() => {
@@ -359,25 +366,22 @@ export function renderDetail(r: Row, termCols: number): string[] {
           return c ? heatNum(s, c) : s;
         })()
       : "-";
-  out.push(
-    `${label("model")}${safe(shortModel(r.model))}  ${DIM}·${RESET}  ${ctx} ctx`,
-  );
-  out.push(`${label("version")}${safe(r.version)}`);
+  out.push(`${label("context")}${ctx}`);
+  out.push(`${label("model")}${safe(shortModel(r.model))}`);
   out.push(`${label("host")}${safe(r.host)}`);
-  const cpuC = cpuColor(r.cpu);
-  const cpuStr = `${r.cpu.toFixed(1)}%`;
+  // full cwd (not the table's shortened last segment), home root as ~
   out.push(
-    `${label("cpu/mem")}${cpuC ? heatNum(cpuStr, cpuC) : cpuStr}  ${DIM}·${RESET}  ${formatMem(r.mem)}`,
+    `${label("project")}${safe(r.project ? tildePath(r.project) : null)}`,
   );
-  out.push(
-    `${label("uptime")}${formatDuration(r.uptimeSec)}  ${DIM}·${RESET}  last ${
-      r.lastMs ? formatDuration((Date.now() - r.lastMs) / 1000) : "-"
-    } ago`,
-  );
-  if (r.transcript) out.push(`${label("log")}${safe(r.transcript)}`);
+  out.push(`${label("branch")}${safe(r.branch)}`);
+  if (r.transcript) {
+    // relative to ~/.claude/ — the absolute prefix is just noise in this view
+    const log = r.transcript.replace(/^.*\/\.claude\//, "");
+    out.push(`${label("log")}${safe(log)}`);
+  }
 
   out.push("");
-  out.push(`${BOLD}Prompt${RESET}`);
+  out.push(`${BOLD}Last Prompt${RESET}`);
   out.push(...wrap(safe(r.prompt ?? r.sessionName), 2));
 
   if (r.subagents.length) {

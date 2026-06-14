@@ -67,6 +67,13 @@ export function shortProject(cwd: string | null) {
   return cwd.split("/").filter(Boolean).at(-1) ?? cwd;
 }
 
+// Replace a leading home-directory root with ~ so full paths stay readable
+export function tildePath(path: string) {
+  const home = homedir();
+  if (path === home) return "~";
+  return path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path;
+}
+
 // Only one distinction matters at a glance: Claude is actively working (busy,
 // green) or it isn't and may want you (idle, waiting, in a shell, compacting —
 // all red). Claude Code coins new statuses over time, so anything that isn't
