@@ -43,9 +43,10 @@ interface Col {
   min?: number;
 }
 const cols: Col[] = [
-  // first column doubles as the tree gutter: a status dot on session rows, a
-  // branch (├─/└─) on sub-process rows, a pipe (│) on sub-agent rows
-  { key: "state", header: "S", align: "l" },
+  // first column is a 1-char tree gutter: a colored status dot (●) on session
+  // rows, a branch (├/└) on sub-process rows, a cyan diamond (◆) on sub-agent
+  // rows. Headerless — the glyph speaks for itself, like systemd's status dot.
+  { key: "state", header: "", align: "l" },
   { key: "pid", header: "PID", align: "r", min: 5 },
   { key: "mem", header: "MEM", align: "r", min: 4 },
   { key: "cpu", header: "CPU", align: "r", min: 5 }, // up to "99.9%"
@@ -180,10 +181,10 @@ export function buildFrame(rows: Row[], termCols: number): Frame {
   ];
 
   // widths use the plain cell text (color is added afterward); the state
-  // column is the tree gutter, 2 wide to fit the branch glyphs (├─/└─/│);
+  // column is the tree gutter, 1 wide — a single status dot or tree glyph;
   // tree columns also fit child values
   const widths = cols.map(({ key, header, min = 0 }) => {
-    if (key === "state") return 2; // dot or 2-char tree glyph
+    if (key === "state") return 1; // dot or single tree glyph
     let w = Math.max(
       header.length,
       min,
@@ -223,7 +224,7 @@ export function buildFrame(rows: Row[], termCols: number): Frame {
   // aligned under the session's columns, then the command name; the whole row
   // is dimmed so sessions stay the focus
   const childLine = (c: any, isLast: boolean) => {
-    const branch = pad(isLast ? "└─" : "├─", widths[stateI]);
+    const branch = pad(isLast ? "└" : "├", widths[stateI]);
     const stats = TREE_COLS.map((key) => {
       const i = cols.findIndex((col) => col.key === key);
       return pad(c[key], widths[i], cols[i].align === "r");
@@ -243,7 +244,7 @@ export function buildFrame(rows: Row[], termCols: number): Frame {
   const ctxI = cols.findIndex((c) => c.key === "ctx");
   const modelI = cols.findIndex((c) => c.key === "model");
   const agentLine = (a: any) => {
-    const branch = pad("│", widths[stateI]);
+    const branch = pad("◆", widths[stateI]);
     const stats = TREE_COLS.map((key) => {
       const i = cols.findIndex((col) => col.key === key);
       if (key === "up" && a.uptimeSec != null)
@@ -261,7 +262,7 @@ export function buildFrame(rows: Row[], termCols: number): Frame {
     let activity = a.activity ?? "";
     if (activity.length > room) activity = `${activity.slice(0, room - 1)}…`;
     const tail = activity ? `  ${activity}` : "";
-    return `${DIM}${branch}  ${stats}${RESET}  ${CYAN}${ctx}  ${model}${tail}${RESET}`;
+    return `${CYAN}${branch}${RESET}  ${DIM}${stats}${RESET}  ${CYAN}${ctx}  ${model}${tail}${RESET}`;
   };
 
   // a dim summary line that stands in for capped sub-agent/sub-process rows,
@@ -269,7 +270,7 @@ export function buildFrame(rows: Row[], termCols: number): Frame {
   const moreLine = (glyph: string, hidden: number, noun: string) =>
     `${DIM}${pad(glyph, widths[stateI])}  … +${hidden} more ${noun}${RESET}`;
 
-  // each group is a session row, then its live sub-agents (pipe-marked), then
+  // each group is a session row, then its live sub-agents (◆-marked), then
   // its sub-process tree (branch-marked), kept together so truncation never
   // orphans them. Each kind is capped so one busy session can't fill the view.
   const groups: Group[] = view.map((r) => {
@@ -281,17 +282,17 @@ export function buildFrame(rows: Row[], termCols: number): Frame {
     });
     if (r.subagents.length > agents.length)
       lines.push(
-        moreLine("│", r.subagents.length - agents.length, "sub-agents"),
+        moreLine("◆", r.subagents.length - agents.length, "sub-agents"),
       );
 
     const kids = r.children.slice(0, MAX_CHILD_ROWS);
     const capped = r.children.length > kids.length;
     kids.forEach((c, i) => {
-      // when capped the overflow line is the closer, so no child gets └─
+      // when capped the overflow line is the closer, so no child gets └
       lines.push(childLine(c, !capped && i === kids.length - 1));
     });
     if (capped)
-      lines.push(moreLine("└─", r.children.length - kids.length, "processes"));
+      lines.push(moreLine("└", r.children.length - kids.length, "processes"));
 
     return { key: rowKey(r.raw), lines };
   });

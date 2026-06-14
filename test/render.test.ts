@@ -72,6 +72,10 @@ describe("render helpers", () => {
     expect(text).toContain("cctop");
     expect(text).toContain("implement tests");
     expect(text).toContain("bun test");
+    // 1-char tree gutter: ● session, ◆ sub-agent, └ the lone sub-process
+    expect(text).toContain("●");
+    expect(text).toContain("◆");
+    expect(text).toContain("└");
   });
 
   test("caps sub-agent and sub-process rows in list view; detail shows all", () => {
@@ -96,8 +100,10 @@ describe("render helpers", () => {
     expect(lines.length).toBe(19);
     expect(text).toContain("+4 more sub-agents");
     expect(text).toContain("+3 more processes");
-    // a capped child list is closed by the overflow line, not a real └─ row
-    expect(text).not.toContain("└─  bash");
+    // the overflow line is the closer (└), so every shown child branches with
+    // ├ — no child stat row (└ followed by its pid) gets the closing glyph
+    expect(text).not.toMatch(/└\s+\d/);
+    expect(text).toContain("├");
 
     const detail = stripAnsi(renderDetail(row, 120).join("\n"));
     expect(detail).toContain("Sub-agents (12)");
