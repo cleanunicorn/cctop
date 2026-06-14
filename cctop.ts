@@ -41,7 +41,7 @@ const HELP = `\x1b[1mcctop\x1b[0m - monitor running Claude Code sessions
                          model, or session id contains this
 
 \x1b[1mOptions:\x1b[0m
-  -w, --watch[=seconds]  set the refresh interval (default: 2s)
+  -w, --watch[=seconds]  set the refresh interval (default: 1s, min 0.25s)
   --once                 render once and exit (default when piped)
   --json                 print full session details as JSON
   -v, --version          show version
@@ -56,7 +56,7 @@ Runs as an interactive TUI on a terminal; prints once when piped or --once.
 \x1b[1mExamples:\x1b[0m
   cctop                  # live TUI
   cctop flux-operator    # only sessions matching "flux-operator"
-  cctop --watch=1        # refresh every second
+  cctop --watch=0.5      # refresh twice a second
   cctop --once           # single frame
   cctop --json           # machine-readable snapshot`;
 
@@ -66,7 +66,10 @@ function fail(message: string): never {
 }
 
 let filter: string | null = null;
-let watchSecs = 2; // refresh interval; live by default on a terminal
+let watchSecs = 1; // refresh interval; live by default on a terminal
+// Below ~0.25s the %CPU sampling window (200ms) collapses to the lifetime
+// average and the process-table walk's duty cycle climbs for no real gain.
+const MIN_WATCH_SECS = 0.25;
 let once = false; // force a single frame and exit
 let asJson = false;
 const args = Bun.argv.slice(2);
@@ -81,10 +84,13 @@ for (let i = 0; i < args.length; i++) {
   } else if (arg === "--once") {
     once = true;
   } else if (arg === "-w" || arg === "--watch") {
-    // interval already defaults to 2s; flag is accepted for clarity
+    // interval already defaults to 1s; flag is accepted for clarity
   } else if (arg.startsWith("--watch=")) {
     watchSecs = Number(arg.slice(8));
-    if (!(watchSecs > 0)) fail(`invalid watch interval: ${arg.slice(8)}`);
+    if (!(watchSecs >= MIN_WATCH_SECS))
+      fail(
+        `invalid watch interval: ${arg.slice(8)} (minimum ${MIN_WATCH_SECS}s)`,
+      );
   } else if (arg === "--json") {
     asJson = true;
   } else if (arg.startsWith("-")) {

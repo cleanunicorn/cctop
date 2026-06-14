@@ -86,7 +86,7 @@ cctop [filter] [options]
 
   filter                 only show sessions whose project, host, branch,
                          model, or session id contains this
-  -w, --watch[=seconds]  set the refresh interval (default: 2s)
+  -w, --watch[=seconds]  set the refresh interval (default: 1s, min 0.25s)
   --once                 render once and exit (default when piped)
   --json                 print full session details as JSON
   -v, --version          show version
@@ -97,7 +97,7 @@ Examples:
 
 ```sh
 cctop flux         # start filtered to sessions matching "flux"
-cctop --watch=1    # refresh every second
+cctop --watch=0.5  # refresh twice a second
 cctop --once       # single frame, then exit
 cctop --json       # machine-readable snapshot
 ```
