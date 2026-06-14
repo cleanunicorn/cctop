@@ -14,6 +14,7 @@ export const YELLOW = "\x1b[33m";
 export const GREEN = "\x1b[32m";
 export const BRIGHT_GREEN = "\x1b[92m";
 export const CYAN = "\x1b[36m";
+export const BLUE = "\x1b[94m";
 
 // Cells carry color codes inline, so width and padding must count only the
 // visible characters, not the escape sequences.

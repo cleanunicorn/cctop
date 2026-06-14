@@ -8,6 +8,7 @@
 
 import { collectRows, matchRow, type Row } from "./collect.ts";
 import {
+  BLUE,
   BOLD,
   CYAN,
   clockTime,
@@ -69,7 +70,8 @@ const SORTS: SortMode[] = [
   { name: "pid", cmp: (a, b) => a.pid - b.pid },
 ];
 
-const SELBAR = `${CYAN}▌${RESET} `; // left bar marking the selected group
+// blue so it stays distinct from the green/red state dots and cyan sub-agents
+const SELBAR = `${BLUE}▌${RESET} `; // left bar marking the selected group
 const GUTTER = "  "; // matching width for unselected rows + header
 
 export interface AppOptions {
