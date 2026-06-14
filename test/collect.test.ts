@@ -649,3 +649,35 @@ describe("cpu sampling", () => {
     expect(cpu).toBe(0);
   });
 });
+
+// Identifying a Claude Code process and reading its version out of the
+// version-named executable path (.../claude/versions/2.1.176).
+describe("claude process identification", () => {
+  const proc = (name: string, path: string | null): Proc => ({
+    pid: 1,
+    ppid: 1,
+    rss: 0,
+    cpuSec: 0,
+    startSec: 0,
+    path,
+    name,
+  });
+
+  test("matches by name or a versioned executable path", () => {
+    expect(__test.isClaudeProc(proc("claude", null))).toBe(true);
+    expect(
+      __test.isClaudeProc(proc("2.1.176", "/u/claude/versions/2.1.176")),
+    ).toBe(true);
+    expect(__test.isClaudeProc(proc("node", "/usr/bin/node"))).toBe(false);
+    expect(__test.isClaudeProc(proc("bash", null))).toBe(false);
+  });
+
+  test("reads the version from the executable's last path segment", () => {
+    expect(__test.versionFromPath("/u/claude/versions/2.1.176")).toBe(
+      "2.1.176",
+    );
+    expect(__test.versionFromPath("/u/claude/versions/2.1")).toBe("2.1");
+    expect(__test.versionFromPath("/usr/local/bin/claude")).toBeNull();
+    expect(__test.versionFromPath(null)).toBeNull();
+  });
+});

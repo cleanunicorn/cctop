@@ -4,17 +4,24 @@
 import { describe, expect, test } from "bun:test";
 import {
   BOLD,
+  BRIGHT_GREEN,
   CYAN,
+  clockTime,
+  DIM,
   formatDuration,
   formatMem,
   formatTokens,
   pad,
+  RED,
   RESET,
   sanitizeDisplay,
   shortProject,
+  stateDot,
+  stateWord,
   stripAnsi,
   truncate,
   visLen,
+  YELLOW,
 } from "../src/format.ts";
 
 describe("format helpers", () => {
@@ -61,5 +68,23 @@ describe("format helpers", () => {
     expect(truncate("hello", 10)).toBe("hello");
     expect(truncate("hello", 4)).toBe("hel…");
     expect(truncate("hello", 1)).toBe("h");
+  });
+
+  test("colors session state as a word per status", () => {
+    expect(stateWord("busy")).toBe(`${BRIGHT_GREEN}busy${RESET}`);
+    expect(stateWord("waiting")).toBe(`${YELLOW}waiting${RESET}`);
+    expect(stateWord("idle")).toBe(`${RED}idle${RESET}`);
+    expect(stateWord("?")).toBe(`${DIM}?${RESET}`);
+  });
+
+  test("renders a status dot, dim for unknown state", () => {
+    expect(stateDot("busy")).toBe(`${BRIGHT_GREEN}●${RESET}`);
+    expect(stateDot("waiting")).toBe(`${YELLOW}●${RESET}`);
+    expect(stateDot("idle")).toBe(`${RED}●${RESET}`);
+    expect(stateDot("?")).toBe(`${DIM}·${RESET}`);
+  });
+
+  test("formats the clock as zero-padded HH:MM:SS", () => {
+    expect(clockTime()).toMatch(/^\d{2}:\d{2}:\d{2}$/);
   });
 });

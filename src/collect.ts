@@ -139,6 +139,8 @@ export const __test = {
   liveSubagents,
   hostApp,
   cpuPercent,
+  isClaudeProc,
+  versionFromPath,
 };
 
 function readSessions(): Map<number, Session> {
