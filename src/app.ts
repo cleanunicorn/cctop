@@ -499,8 +499,8 @@ export async function runApp(opts: AppOptions): Promise<void> {
 
   function listScreen(cols: number, termRows: number): string[] {
     const rows = displayRows();
-    const top = [...summaryLines(rows), ""];
-    const footer = footerLine(cols);
+    const top = [...summaryLines(rows).map((l) => GUTTER + l), ""];
+    const footer = GUTTER + footerLine(cols - GUTTER.length);
     const region = Math.max(
       termRows - top.length - 1 /*header*/ - 1 /*footer*/,
       1,
@@ -576,7 +576,7 @@ export async function runApp(opts: AppOptions): Promise<void> {
       state.mode = "list";
       return listScreen(cols, termRows);
     }
-    const footer = footerLine(cols);
+    const footer = GUTTER + footerLine(cols - GUTTER.length);
     const region = Math.max(termRows - 1, 1);
     const body = renderDetail(row, cols - 2).map((l) => `  ${l}`);
     const clipped = clipLines(body, region, state.detailScroll);
@@ -610,7 +610,7 @@ export async function runApp(opts: AppOptions): Promise<void> {
       b("Exit"),
       key("q / Ctrl-C", "quit cctop"),
     ];
-    const footer = `${DIM}press any of esc / q / ? to return${RESET}`;
+    const footer = `${GUTTER}${DIM}press any of esc / q / ? to return${RESET}`;
     const region = Math.max(termRows - 1, 1);
     const clipped = clipLines(
       body.map((l) => `  ${l}`),
