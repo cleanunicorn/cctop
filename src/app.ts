@@ -8,7 +8,7 @@
 
 import { collectRows, matchRow, type Row } from "./collect.ts";
 import {
-  BLUE,
+  BLUE_BG,
   BOLD,
   CYAN,
   clockTime,
@@ -70,8 +70,11 @@ const SORTS: SortMode[] = [
   { name: "pid", cmp: (a, b) => a.pid - b.pid },
 ];
 
-// blue so it stays distinct from the green/red state dots and cyan sub-agents
-const SELBAR = `${BLUE}▌${RESET} `; // left bar marking the selected group
+// A solid blue background cell, not a ▌ half-block glyph: block glyphs leave
+// vertical gaps in terminals that add line spacing (e.g. JetBrains/GoLand),
+// whereas a background color fills the leading, so the bar stays continuous
+// everywhere. Blue keeps it distinct from the green/red dots and cyan agents.
+const SELBAR = `${BLUE_BG} ${RESET} `; // left bar marking the selected group
 const GUTTER = "  "; // matching width for unselected rows + header
 
 export interface AppOptions {

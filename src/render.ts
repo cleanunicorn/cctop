@@ -43,9 +43,11 @@ interface Col {
   min?: number;
 }
 const cols: Col[] = [
-  // first column is a 1-char tree gutter: a colored status dot (●) on session
-  // rows, a branch (├/└) on sub-process rows, a cyan diamond (◆) on sub-agent
-  // rows. Headerless — the glyph speaks for itself, like systemd's status dot.
+  // first column is the tree gutter: a colored status dot (●) on session rows,
+  // then a connected spine of branches for its children. Sub-processes branch
+  // with ├─/└─ into their stats; sub-agents have no stats columns, so their
+  // branch runs an arm out to the UP column, where their cyan stats begin.
+  // Headerless — the glyphs speak for themselves, like systemd's status dot.
   { key: "state", header: "", align: "l" },
   { key: "pid", header: "PID", align: "r", min: 5 },
   { key: "mem", header: "MEM", align: "r", min: 4 },
@@ -181,10 +183,10 @@ export function buildFrame(rows: Row[], termCols: number): Frame {
   ];
 
   // widths use the plain cell text (color is added afterward); the state
-  // column is the tree gutter, 1 wide — a single status dot or tree glyph;
-  // tree columns also fit child values
+  // column is the tree gutter, 2 wide — a status dot, or a branch plus a
+  // per-child marker (├◆ agent, ├─ process); tree columns also fit child values
   const widths = cols.map(({ key, header, min = 0 }) => {
-    if (key === "state") return 1; // dot or single tree glyph
+    if (key === "state") return 2; // ● dot, or ├◆ / ├─ branch+marker
     let w = Math.max(
       header.length,
       min,
@@ -224,7 +226,7 @@ export function buildFrame(rows: Row[], termCols: number): Frame {
   // aligned under the session's columns, then the command name; the whole row
   // is dimmed so sessions stay the focus
   const childLine = (c: any, isLast: boolean) => {
-    const branch = pad(isLast ? "└" : "├", widths[stateI]);
+    const branch = pad(isLast ? "└─" : "├─", widths[stateI]);
     const stats = TREE_COLS.map((key) => {
       const i = cols.findIndex((col) => col.key === key);
       return pad(c[key], widths[i], cols[i].align === "r");
@@ -236,63 +238,76 @@ export function buildFrame(rows: Row[], termCols: number): Frame {
     return `${DIM}${head}${name}${RESET}`;
   };
 
-  // a live sub-agent row: a dimmed pipe (not a branch — it isn't a process) in
-  // the tree gutter, then blank process columns except UP, which we derive
-  // from the transcript's creation time so it still shows how long it has been
-  // running; its context and model then line up under the parent's CTX/MODEL
-  // columns (cyan marks it as a sub-agent), with the action flowing free after
+  // a live sub-agent row: branches off the same spine as the processes, but it
+  // has no pid/mem/cpu of its own, so the branch runs a horizontal arm across
+  // those empty columns out to the UP column, where the agent's own stats begin
+  // — all cyan: uptime (from the transcript's creation time), then ctx/model
+  // under the parent's columns, with the action flowing free after.
   const ctxI = cols.findIndex((c) => c.key === "ctx");
   const modelI = cols.findIndex((c) => c.key === "model");
-  const agentLine = (a: any) => {
-    const branch = pad("◆", widths[stateI]);
-    const stats = TREE_COLS.map((key) => {
-      const i = cols.findIndex((col) => col.key === key);
-      if (key === "up" && a.uptimeSec != null)
-        return pad(formatDuration(a.uptimeSec), widths[i], true);
-      return " ".repeat(widths[i]);
-    }).join("  ");
+  const upI = cols.findIndex((c) => c.key === "up");
+  const agentLine = (a: any, isLast: boolean) => {
+    // the arm spans the gutter and the empty pid/mem/cpu columns (with their
+    // separators), reaching the UP column where the cyan stats take over
+    const armW =
+      widths[stateI] +
+      ["pid", "mem", "cpu"].reduce((sum, key) => {
+        const i = cols.findIndex((col) => col.key === key);
+        return sum + 2 + widths[i];
+      }, 0);
+    const arm = `${isLast ? "└" : "├"}${"─".repeat(Math.max(0, armW - 1))}`;
+    const up = pad(
+      a.uptimeSec != null ? formatDuration(a.uptimeSec) : "",
+      widths[upI],
+      true,
+    );
     const ctx = pad(
       a.ctx != null ? formatTokens(a.ctx) : "?",
       widths[ctxI],
       true,
     );
     const model = pad(shortModel(a.model) ?? "agent", widths[modelI], false);
-    const prefix = `${branch}  ${stats}  ${ctx}  ${model}`;
+    const prefix = `${arm}  ${up}  ${ctx}  ${model}`;
     const room = Math.max(termCols - visLen(prefix) - 2, 8);
     let activity = a.activity ?? "";
     if (activity.length > room) activity = `${activity.slice(0, room - 1)}…`;
     const tail = activity ? `  ${activity}` : "";
-    return `${CYAN}${branch}${RESET}  ${DIM}${stats}${RESET}  ${CYAN}${ctx}  ${model}${tail}${RESET}`;
+    return `${DIM}${arm}${RESET}  ${CYAN}${up}  ${ctx}  ${model}${tail}${RESET}`;
   };
 
-  // a dim summary line that stands in for capped sub-agent/sub-process rows,
-  // glyph in the tree gutter to match the rows it replaces
-  const moreLine = (glyph: string, hidden: number, noun: string) =>
-    `${DIM}${pad(glyph, widths[stateI])}  … +${hidden} more ${noun}${RESET}`;
+  // a dim summary line that stands in for capped sub-agent/sub-process rows; a
+  // branch glyph keeps it on the spine like the rows it replaces
+  const moreLine = (branch: string, hidden: number, noun: string) =>
+    `${DIM}${pad(branch, widths[stateI])}  … +${hidden} more ${noun}${RESET}`;
 
-  // each group is a session row, then its live sub-agents (◆-marked), then
-  // its sub-process tree (branch-marked), kept together so truncation never
-  // orphans them. Each kind is capped so one busy session can't fill the view.
+  // each group is a session row, then its live sub-agents (◆), then its
+  // sub-process tree (─), all hanging off one connected spine: every child
+  // branches with ├ and only the final line of the group closes it with └.
+  // Kept together so truncation never orphans them; each kind is capped so one
+  // busy session can't fill the view.
   const groups: Group[] = view.map((r) => {
     const lines = [sessionLine(r.cells, r.raw)];
 
     const agents = r.subagents.slice(0, MAX_SUBAGENT_ROWS);
-    agents.forEach((a) => {
-      lines.push(agentLine(a));
-    });
-    if (r.subagents.length > agents.length)
-      lines.push(
-        moreLine("◆", r.subagents.length - agents.length, "sub-agents"),
-      );
-
+    const moreAgents = r.subagents.length - agents.length;
     const kids = r.children.slice(0, MAX_CHILD_ROWS);
-    const capped = r.children.length > kids.length;
-    kids.forEach((c, i) => {
-      // when capped the overflow line is the closer, so no child gets └
-      lines.push(childLine(c, !capped && i === kids.length - 1));
-    });
-    if (capped)
-      lines.push(moreLine("└", r.children.length - kids.length, "processes"));
+    const moreKids = r.children.length - kids.length;
+
+    // total child lines, so the very last one (whatever kind) gets the └ closer
+    const total =
+      agents.length +
+      (moreAgents > 0 ? 1 : 0) +
+      kids.length +
+      (moreKids > 0 ? 1 : 0);
+    let n = 0;
+    const last = () => ++n === total;
+
+    for (const a of agents) lines.push(agentLine(a, last()));
+    if (moreAgents > 0)
+      lines.push(moreLine(last() ? "└" : "├", moreAgents, "sub-agents"));
+    for (const c of kids) lines.push(childLine(c, last()));
+    if (moreKids > 0)
+      lines.push(moreLine(last() ? "└" : "├", moreKids, "processes"));
 
     return { key: rowKey(r.raw), lines };
   });

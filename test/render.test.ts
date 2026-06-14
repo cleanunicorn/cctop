@@ -72,10 +72,12 @@ describe("render helpers", () => {
     expect(text).toContain("cctop");
     expect(text).toContain("implement tests");
     expect(text).toContain("bun test");
-    // 1-char tree gutter: ● session, ◆ sub-agent, └ the lone sub-process
+    // connected tree gutter: ● session, then a spine of branches — the
+    // sub-agent runs a long arm out to its (markerless) UP column, the lone
+    // sub-process closes the spine with └─
     expect(text).toContain("●");
-    expect(text).toContain("◆");
-    expect(text).toContain("└");
+    expect(text).toMatch(/├─{4,}/);
+    expect(text).toContain("└─");
   });
 
   test("caps sub-agent and sub-process rows in list view; detail shows all", () => {
