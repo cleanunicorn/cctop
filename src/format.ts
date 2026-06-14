@@ -66,15 +66,26 @@ export function shortProject(cwd: string | null) {
   return cwd.split("/").filter(Boolean).at(-1) ?? cwd;
 }
 
+// busy/idle/waiting each get a color: green working, yellow on a tool, red
+// waiting on you, dim unknown
+const stateColor = (state: string) =>
+  state === "busy"
+    ? BRIGHT_GREEN
+    : state === "waiting"
+      ? YELLOW
+      : state === "idle"
+        ? RED
+        : DIM;
+
 // busy/idle shown as a status dot rather than a word
 export const stateDot = (state: string) =>
-  state === "busy"
-    ? `${BRIGHT_GREEN}●${RESET}` // actively working
-    : state === "waiting"
-      ? `${YELLOW}●${RESET}` // waiting on a tool/sub-agent
-      : state === "idle"
-        ? `${RED}●${RESET}` // waiting on you
-        : `${DIM}·${RESET}`;
+  state === "busy" || state === "waiting" || state === "idle"
+    ? `${stateColor(state)}●${RESET}`
+    : `${DIM}·${RESET}`;
+
+// the state as a colored word, for places that show it spelled out
+export const stateWord = (state: string) =>
+  `${stateColor(state)}${state}${RESET}`;
 
 // CPU% and context fill warm toward red as they climb; low values stay plain
 export const cpuColor = (v: number) =>

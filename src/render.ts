@@ -24,6 +24,7 @@ import {
   sanitizeDisplay,
   shortProject,
   stateDot,
+  stateWord,
   truncate,
   visLen,
   YELLOW,
@@ -330,10 +331,9 @@ export function renderDetail(r: Row, termCols: number): string[] {
   const dot = stateDot(r.state);
   const out: string[] = [];
   const projectShort = safe(shortProject(r.project), "?");
-  out.push(
-    `${dot} ${BOLD}${projectShort}${RESET}  ${DIM}${safe(r.state)}${RESET}`,
-  );
+  out.push(`${dot} ${BOLD}${projectShort}${RESET}`);
   out.push("");
+  out.push(`${label("state")}${stateWord(safe(r.state))}`);
   out.push(`${label("session")}${safe(r.sessionId)}`);
   if (r.sessionName) out.push(`${label("name")}${safe(r.sessionName)}`);
   out.push(`${label("pid")}${r.pid}  ${DIM}·${RESET}  ${safe(r.kind)}`);
