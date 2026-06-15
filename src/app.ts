@@ -100,7 +100,7 @@ export async function runApp(opts: AppOptions): Promise<void> {
   const out = process.stdout;
   const state: State = {
     rows: [],
-    usage: readUsage(),
+    usage: await readUsage(),
     mode: "list",
     selectedKey: null,
     selectedIndex: 0,
@@ -200,7 +200,7 @@ export async function runApp(opts: AppOptions): Promise<void> {
     refreshing = true;
     try {
       state.rows = await collectRows(null); // collect all; filter in-app
-      state.usage = readUsage(); // cheap single-file read; refresh alongside
+      state.usage = await readUsage(); // cheap single-file read; refresh alongside
     } finally {
       refreshing = false;
     }

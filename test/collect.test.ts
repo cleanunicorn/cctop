@@ -358,12 +358,14 @@ describe("transcript file scanning", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  test("returns empty details for missing or empty files", () => {
-    expect(__test.transcriptDetails(join(dir, "nope.jsonl"))).toEqual({});
-    expect(__test.transcriptDetails(write("empty.jsonl", ""))).toEqual({});
+  test("returns empty details for missing or empty files", async () => {
+    expect(await __test.transcriptDetails(join(dir, "nope.jsonl"))).toEqual({});
+    expect(await __test.transcriptDetails(write("empty.jsonl", ""))).toEqual(
+      {},
+    );
   });
 
-  test("pulls model, context, branch, and prompt from a transcript", () => {
+  test("pulls model, context, branch, and prompt from a transcript", async () => {
     const path = write(
       "session.jsonl",
       jsonl([
@@ -377,7 +379,7 @@ describe("transcript file scanning", () => {
         ),
       ]),
     );
-    expect(__test.transcriptDetails(path)).toEqual({
+    expect(await __test.transcriptDetails(path)).toEqual({
       model: "claude-sonnet-4",
       ctx: 1010,
       branch: "feature/parse",
@@ -385,7 +387,7 @@ describe("transcript file scanning", () => {
     });
   });
 
-  test("skips a half-written final line instead of throwing", () => {
+  test("skips a half-written final line instead of throwing", async () => {
     const path = write(
       "partial.jsonl",
       `${JSON.stringify(user("the prompt"))}\n${JSON.stringify(
@@ -394,13 +396,13 @@ describe("transcript file scanning", () => {
         }),
       )}\n{"type":"assistant","message":{"mod`, // truncated append
     );
-    const d = __test.transcriptDetails(path);
+    const d = await __test.transcriptDetails(path);
     expect(d.model).toBe("claude-sonnet-4");
     expect(d.prompt).toBe("the prompt");
     expect(d.branch).toBe("main");
   });
 
-  test("scans backwards across read chunks for a far-back prompt", () => {
+  test("scans backwards across read chunks for a far-back prompt", async () => {
     // The prompt sits at the very top; padding after it exceeds one read chunk
     // (256 KiB), so finding it requires walking back through multiple chunks.
     const filler = "x".repeat(1024);
@@ -414,13 +416,13 @@ describe("transcript file scanning", () => {
       }),
     );
     const path = write("big.jsonl", jsonl(lines));
-    const d = __test.transcriptDetails(path);
+    const d = await __test.transcriptDetails(path);
     expect(d.model).toBe("claude-opus-4");
     expect(d.branch).toBe("main");
     expect(d.prompt).toBe("the very first prompt");
   });
 
-  test("reassembles a single line longer than two read chunks", () => {
+  test("reassembles a single line longer than two read chunks", async () => {
     // One assistant turn ~700 KiB — wider than two 256 KiB chunks — so the
     // backward scan hits a chunk with no newline at all and must carry the
     // whole block forward until the line is reassembled at the file start.
@@ -437,13 +439,13 @@ describe("transcript file scanning", () => {
         ),
       ]),
     );
-    const d = __test.transcriptDetails(path);
+    const d = await __test.transcriptDetails(path);
     expect(d.model).toBe("claude-opus-4");
     expect(d.branch).toBe("main");
     expect(d.prompt).toBe("small far-back prompt");
   });
 
-  test("reads agent model, context, activity, and running state", () => {
+  test("reads agent model, context, activity, and running state", async () => {
     const path = write(
       "agent-1.jsonl",
       jsonl([
@@ -455,14 +457,14 @@ describe("transcript file scanning", () => {
         user([{ type: "tool_result", content: "..." }]),
       ]),
     );
-    const ctx = __test.agentContext(path);
+    const ctx = await __test.agentContext(path);
     expect(ctx.model).toBe("claude-haiku-4");
     expect(ctx.ctx).toBe(208);
     expect(ctx.activity).toBe("Bash: ls -la");
     expect(ctx.running).toBe(true); // last turn is a tool_result, awaiting next
   });
 
-  test("treats a text-only final assistant turn as not running", () => {
+  test("treats a text-only final assistant turn as not running", async () => {
     const path = write(
       "agent-2.jsonl",
       jsonl([
@@ -471,7 +473,7 @@ describe("transcript file scanning", () => {
         ]),
       ]),
     );
-    const ctx = __test.agentContext(path);
+    const ctx = await __test.agentContext(path);
     expect(ctx.activity).toBe("all done");
     expect(ctx.running).toBe(false);
   });
@@ -511,7 +513,7 @@ describe("sub-agent liveness", () => {
   const textTurn = (text: string) =>
     assistant("claude-haiku-4", { input_tokens: 5 }, [{ type: "text", text }]);
 
-  test("includes fresh and mid-tool-call agents, drops the rest", () => {
+  test("includes fresh and mid-tool-call agents, drops the rest", async () => {
     // fresh: quiet only 5s, finished — live anyway (inside the 20s window)
     agentFile("agent-fresh.jsonl", 5_000, [
       assistant("claude-opus-4", { input_tokens: 900 }, [
@@ -526,7 +528,12 @@ describe("sub-agent liveness", () => {
     agentFile("agent-gone.jsonl", 300_000, [toolTurn("sleep 1")]);
 
     const seen = new Set<string>();
-    const agents = __test.liveSubagents(transcript(), now, seen, new Set());
+    const agents = await __test.liveSubagents(
+      transcript(),
+      now,
+      seen,
+      new Set(),
+    );
 
     // only the fresh (ctx 900) and busy (ctx 5) agents survive, ctx-sorted
     expect(agents.map((a) => a.model)).toEqual([
@@ -542,20 +549,50 @@ describe("sub-agent liveness", () => {
     expect(seen.size).toBe(3);
   });
 
-  test("lists a subagents directory only once across sessions", () => {
+  test("lists a subagents directory only once across sessions", async () => {
     agentFile("agent-dup.jsonl", 1_000, [textTurn("hi")]);
     const seenDirs = new Set<string>();
     expect(
-      __test.liveSubagents(transcript(), now, new Set(), seenDirs).length,
+      (await __test.liveSubagents(transcript(), now, new Set(), seenDirs))
+        .length,
     ).toBeGreaterThan(0);
     // a second session falling back to the same transcript sees nothing
     expect(
-      __test.liveSubagents(transcript(), now, new Set(), seenDirs),
+      await __test.liveSubagents(transcript(), now, new Set(), seenDirs),
     ).toEqual([]);
   });
 
-  test("returns nothing without a transcript", () => {
-    expect(__test.liveSubagents(null, now, new Set(), new Set())).toEqual([]);
+  test("attaches shared subagents to the first row in row-base order", async () => {
+    const transcriptPath = join(dir, "ordered.jsonl");
+    const subdir = join(dir, "ordered", "subagents");
+    mkdirSync(subdir, { recursive: true });
+    const agentPath = join(subdir, "agent-ordered.jsonl");
+    writeFileSync(agentPath, jsonl([textTurn("owned")]));
+    const t = new Date(now - 1_000);
+    utimesSync(agentPath, t, t);
+
+    const seen = new Set<string>();
+    const rows = await __test.attachSubagentsInOrder(
+      [
+        row({ pid: 200, transcript: transcriptPath }),
+        row({ pid: 100, transcript: transcriptPath }),
+      ],
+      now,
+      seen,
+    );
+
+    expect(rows.map((r) => [r.pid, r.subagents.length])).toEqual([
+      [200, 1],
+      [100, 0],
+    ]);
+    expect(rows[0]?.subagents[0]?.activity).toBe("owned");
+    expect(seen.has(agentPath)).toBe(true);
+  });
+
+  test("returns nothing without a transcript", async () => {
+    expect(await __test.liveSubagents(null, now, new Set(), new Set())).toEqual(
+      [],
+    );
   });
 });
 

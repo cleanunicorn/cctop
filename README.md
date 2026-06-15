@@ -30,7 +30,7 @@ waiting for input.
 
 ## Requirements
 
-- [Bun](https://bun.sh) 1.x
+- [Bun](https://bun.sh) 1.3 or newer
 - macOS or Linux
 
 ## Install

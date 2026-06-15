@@ -119,7 +119,11 @@ if (asJson) {
         : "no Claude Code sessions running",
     );
   } else {
-    const frame = buildFrame(rows, process.stdout.columns ?? 200, readUsage());
+    const frame = buildFrame(
+      rows,
+      process.stdout.columns ?? 200,
+      await readUsage(),
+    );
     console.log(
       [
         ...frame.summary,

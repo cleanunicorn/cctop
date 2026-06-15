@@ -86,13 +86,13 @@ in-process, so they never hit the process table — they are read from the
 
 ## Critical gotchas — read before editing
 
-1. **Transcript reads MUST stay synchronous (`node:fs`), not `Bun.file`.**
-   `collect.ts` reads transcripts with `openSync`/`readSync`/`fstatSync`. This
-   is deliberate: Bun's async file I/O (`Bun.file().text()` / `.arrayBuffer()`)
-   *stalls indefinitely* when the process holds the terminal in raw mode on the
-   alternate screen — which the TUI does. Do not "modernize" these back to
-   async; the first frame will hang forever. See the comment above
-   `transcriptDetails()`.
+1. **File *contents* go through `Bun.file` async (`.json()`,
+   `.slice().bytes()`); `node:fs` is only for `readdirSync`/`statSync`.** The
+   async reads are deliberate: `collectRows` overlaps every session's
+   transcript and registry/usage JSON reads with `Promise.all`, so the whole
+   scan runs concurrently. Keep it that way. `readdirSync`/`statSync` (directory
+   listing + mtime/birthtime metadata) stay synchronous — they have no
+   `Bun.file` equivalent.
 
 2. **Non-interactive parity is a contract.** `--once`, `--json`, and piped
    output (`isTTY` false) must keep producing a single plain frame and exit, so

@@ -5,16 +5,10 @@
 // per-pid session registry and the session transcripts, and assembles the
 // rows the UI renders. All read-only; spawns nothing.
 
-import {
-  closeSync,
-  type Dirent,
-  fstatSync,
-  openSync,
-  readdirSync,
-  readFileSync,
-  readSync,
-  statSync,
-} from "node:fs";
+// File contents are read through Bun.file's async API (Bun.file().json() and
+// slice().bytes()); node:fs is kept only for directory listing and stat
+// metadata (mtime/birthtime), which Bun.file does not cover.
+import { type Dirent, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { truncate } from "./format.ts";
 import { cwdOf, listAllProcesses, type Proc } from "./proc.ts";
@@ -75,6 +69,8 @@ export interface Row {
   subagents: SubAgent[];
   children: SubProc[];
 }
+
+type RowBase = Omit<Row, "subagents">;
 
 // Does a row match the filter? Searches project, host, branch, model, and
 // session id/name. Shared by the snapshot path and the live TUI filter.
@@ -149,6 +145,7 @@ export const __test = {
   transcriptDetails,
   agentContext,
   liveSubagents,
+  attachSubagentsInOrder,
   hostApp,
   cpuPercent,
   isClaudeProc,
@@ -157,7 +154,7 @@ export const __test = {
   subprocsOf,
 };
 
-function readSessions(): Map<number, Session> {
+async function readSessions(): Promise<Map<number, Session>> {
   const byPid = new Map<number, Session>();
   let files: string[] = [];
   try {
@@ -165,16 +162,16 @@ function readSessions(): Map<number, Session> {
   } catch {
     return byPid;
   }
-  for (const f of files) {
-    if (!f.endsWith(".json")) continue;
-    try {
-      const raw = JSON.parse(
-        readFileSync(`${CLAUDE_DIR}/sessions/${f}`, "utf8"),
-      );
-      const s = validSession(raw, f);
-      if (s) byPid.set(s.pid, s);
-    } catch {} // partially written entry
-  }
+  await Promise.all(
+    files.map(async (f) => {
+      if (!f.endsWith(".json")) return;
+      try {
+        const raw = await Bun.file(`${CLAUDE_DIR}/sessions/${f}`).json();
+        const s = validSession(raw, f);
+        if (s) byPid.set(s.pid, s);
+      } catch {} // missing or partially written entry
+    }),
+  );
   return byPid;
 }
 
@@ -201,9 +198,9 @@ function parseUsage(raw: any): Usage | null {
   return usage;
 }
 
-export function readUsage(): Usage | null {
+export async function readUsage(): Promise<Usage | null> {
   try {
-    return parseUsage(JSON.parse(readFileSync(USAGE_FILE, "utf8")));
+    return parseUsage(await Bun.file(USAGE_FILE).json());
   } catch {
     return null; // not set up, unreadable, or written half-way
   }
@@ -291,29 +288,23 @@ function noteEntry(details: Details, e: any) {
 const TAIL_CHUNK = 256 * 1024;
 const MAX_TAIL_BYTES = 4 * 1024 * 1024;
 
-// Synchronous on purpose: Bun's async file I/O (Bun.file) can stall when the
-// process also holds the TTY in raw mode on the alternate screen (as the live
-// TUI does), so the tail scan uses node:fs readSync, which is unaffected.
-function transcriptDetails(path: string): Details {
+// Reads the tail through Bun.file's async API, so collectRows can scan many
+// sessions' transcripts concurrently. This used node:fs readSync until Bun
+// fixed a bug where async file I/O stalled while the process held the TTY in
+// raw mode on the alternate screen — which is exactly the live TUI's state.
+async function transcriptDetails(path: string): Promise<Details> {
   const details: Details = {};
-  let fd: number;
   try {
-    fd = openSync(path, "r");
-  } catch {
-    return details; // gone or unreadable
-  }
-  try {
-    const size = fstatSync(fd).size;
-    if (size === 0) return details;
+    const file = Bun.file(path);
+    const size = file.size;
+    if (!size) return details; // gone, empty, or unreadable
     // bytes (not text: chunk cuts can split multibyte chars) of the line
     // straddling the current chunk boundary, completed by the next chunk
     let carry = Buffer.alloc(0);
     let end = size;
     while (end > 0 && size - end < MAX_TAIL_BYTES) {
       const start = Math.max(0, end - TAIL_CHUNK);
-      const len = end - start;
-      const buf = Buffer.alloc(len);
-      readSync(fd, buf, 0, len, start);
+      const buf = Buffer.from(await file.slice(start, end).bytes());
       const block = Buffer.concat([buf, carry]);
       let parseFrom = 0;
       if (start > 0) {
@@ -340,9 +331,7 @@ function transcriptDetails(path: string): Details {
       end = start;
     }
   } catch {
-    // unreadable (permissions)
-  } finally {
-    closeSync(fd);
+    // gone or unreadable (permissions)
   }
   return details;
 }
@@ -412,27 +401,20 @@ const hasBlock = (msg: any, type: string) =>
 
 // An agent transcript's turns are all marked isSidechain, so the main scanner
 // skips them; read the tail for the latest model, context size, activity, and
-// whether the agent is mid-flight. Synchronous for the same reason as
-// transcriptDetails.
-function agentContext(path: string) {
+// whether the agent is mid-flight. Async like transcriptDetails.
+async function agentContext(path: string) {
   const out: {
     model?: string;
     ctx?: number;
     activity?: string | null;
     running: boolean;
   } = { running: false };
-  let fd: number;
   try {
-    fd = openSync(path, "r");
-  } catch {
-    return out;
-  }
-  try {
-    const size = fstatSync(fd).size;
+    const file = Bun.file(path);
+    const size = file.size;
+    if (!size) return out;
     const start = size > MAX_TAIL_BYTES ? size - MAX_TAIL_BYTES : 0;
-    const len = size - start;
-    const buf = Buffer.alloc(len);
-    readSync(fd, buf, 0, len, start);
+    const buf = Buffer.from(await file.slice(start, size).bytes());
     const tail = buf.toString("utf8");
     const entries: any[] = [];
     for (const line of tail.split("\n")) {
@@ -464,8 +446,6 @@ function agentContext(path: string) {
         (last.type === "user" && hasBlock(last.message, "tool_result")));
   } catch {
     // unreadable
-  } finally {
-    closeSync(fd);
   }
   return out;
 }
@@ -474,12 +454,12 @@ function agentContext(path: string) {
 // the live window, each with its own context size (cached by mtime). The
 // subagents directory sits next to the transcript: <...>/<id>.jsonl ->
 // <...>/<id>/subagents (works whether or not the session has a registry entry).
-function liveSubagents(
+async function liveSubagents(
   transcript: string | null,
   nowMs: number,
   seen: Set<string>,
   seenDirs: Set<string>,
-): SubAgent[] {
+): Promise<SubAgent[]> {
   if (!transcript) return [];
   const dir = `${transcript.replace(/\.jsonl$/, "")}/subagents`;
   // two sessions in one project can fall back to the same transcript; only
@@ -505,7 +485,7 @@ function liveSubagents(
     seen.add(path);
     let info = agentCache.get(path);
     if (!info || info.mtimeMs !== mtimeMs) {
-      info = { mtimeMs, ...agentContext(path) };
+      info = { mtimeMs, ...(await agentContext(path)) };
       agentCache.set(path, info);
     }
     // live if it wrote a turn recently, or it is quietly running a tool call
@@ -518,6 +498,28 @@ function liveSubagents(
     });
   }
   return out.sort((a, b) => (b.ctx ?? 0) - (a.ctx ?? 0));
+}
+
+async function attachSubagentsInOrder(
+  rowBases: (RowBase | null)[],
+  nowMs: number,
+  seenAgents: Set<string>,
+): Promise<Row[]> {
+  const seenAgentDirs = new Set<string>();
+  const rows: Row[] = [];
+  for (const row of rowBases) {
+    if (!row) continue;
+    rows.push({
+      ...row,
+      subagents: await liveSubagents(
+        row.transcript,
+        nowMs,
+        seenAgents,
+        seenAgentDirs,
+      ),
+    });
+  }
+  return rows;
 }
 
 // First ancestor past shells and wrappers identifies what hosts the
@@ -645,7 +647,7 @@ export async function collectRows(filter: string | null): Promise<Row[]> {
   const nowMs = Date.now();
   const procs = listAllProcesses();
   const byPid = new Map(procs.map((p) => [p.pid, p]));
-  const sessions = readSessions();
+  const sessions = await readSessions();
 
   const candidates = procs.filter(
     (p) => isClaudeProc(p) || sessions.has(p.pid),
@@ -668,86 +670,84 @@ export async function collectRows(filter: string | null): Promise<Row[]> {
     if (!current.has(pid)) cpuSamples.delete(pid);
   }
 
-  const seenAgents = new Set<string>();
-  const seenAgentDirs = new Set<string>();
-  const rows = candidates.map((p): Row | null => {
-    let s = sessions.get(p.pid) ?? null;
-    // A registry entry whose timestamp does not match the process start means
-    // the PID was reused or the entry is malformed.
-    if (
-      s &&
-      (!p.startSec ||
-        Math.abs(p.startSec * 1000 - s.startedAt) > 60_000 ||
-        s.startedAt > nowMs + 60_000)
-    ) {
-      s = null;
-    }
-    if (!s && !isClaudeProc(p)) return null; // stale entry only
-
-    const cwd = s?.cwd ?? cwdOf(p.pid);
-    const transcript = s
-      ? `${projectDir(s.cwd)}/${s.sessionId}.jsonl`
-      : latestTranscript(cwd, p.startSec);
-    let mtimeMs = 0;
-    if (transcript) {
-      try {
-        mtimeMs = statSync(transcript).mtimeMs;
-      } catch {} // session has not written anything yet
-    }
-    let details: Details = {};
-    if (mtimeMs) {
-      const cached = transcriptCache.get(transcript!);
-      if (cached && cached.mtimeMs === mtimeMs) {
-        details = cached.details; // unchanged since last scan
-      } else {
-        details = transcriptDetails(transcript!);
-        transcriptCache.set(transcript!, { mtimeMs, details });
+  // Transcript reads can overlap across sessions, but sub-agent directory claims
+  // happen later in this same candidate order. That keeps sessions which fall
+  // back to the same transcript from racing over which row owns the agents.
+  const rowBases = await Promise.all(
+    candidates.map(async (p): Promise<RowBase | null> => {
+      let s = sessions.get(p.pid) ?? null;
+      // A registry entry whose timestamp does not match the process start means
+      // the PID was reused or the entry is malformed.
+      if (
+        s &&
+        (!p.startSec ||
+          Math.abs(p.startSec * 1000 - s.startedAt) > 60_000 ||
+          s.startedAt > nowMs + 60_000)
+      ) {
+        s = null;
       }
-    }
-    const lastMs = Math.max(s?.updatedAt ?? 0, mtimeMs);
-    const subagents = liveSubagents(
-      mtimeMs ? transcript : null,
-      nowMs,
-      seenAgents,
-      seenAgentDirs,
-    );
+      if (!s && !isClaudeProc(p)) return null; // stale entry only
 
-    return {
-      pid: p.pid,
-      mem: p.rss,
-      cpu: cpuPercent(p, nowMs),
-      uptimeSec: p.startSec ? nowMs / 1000 - p.startSec : 0,
-      startSec: p.startSec,
-      state: s?.status ?? "?",
-      kind: s?.kind ?? null,
-      sessionId: s?.sessionId ?? null,
-      sessionName: s?.name ?? null,
-      version: s?.version ?? versionFromPath(p.path),
-      host: hostApp(p, byPid),
-      project: cwd,
-      branch: details.branch ?? null,
-      model: details.model ?? null,
-      contextTokens: details.ctx ?? null,
-      lastActivity: lastMs ? new Date(lastMs).toISOString() : null,
-      lastMs,
-      prompt: details.prompt ?? null,
-      transcript: mtimeMs ? transcript : null,
-      subagents,
-      children: subprocsOf(p.pid, childrenOf, candidatePids)
-        .sort((a, b) => b.rss - a.rss || a.pid - b.pid)
-        .map((c) => ({
-          pid: c.pid,
-          name: c.name,
-          mem: c.rss,
-          cpu: cpuPercent(c, nowMs),
-          uptimeSec: c.startSec ? nowMs / 1000 - c.startSec : 0,
-        })),
-    };
-  });
+      const cwd = s?.cwd ?? cwdOf(p.pid);
+      const transcript = s
+        ? `${projectDir(s.cwd)}/${s.sessionId}.jsonl`
+        : latestTranscript(cwd, p.startSec);
+      let mtimeMs = 0;
+      if (transcript) {
+        try {
+          mtimeMs = statSync(transcript).mtimeMs;
+        } catch {} // session has not written anything yet
+      }
+      let details: Details = {};
+      if (mtimeMs) {
+        const cached = transcriptCache.get(transcript!);
+        if (cached && cached.mtimeMs === mtimeMs) {
+          details = cached.details; // unchanged since last scan
+        } else {
+          details = await transcriptDetails(transcript!);
+          transcriptCache.set(transcript!, { mtimeMs, details });
+        }
+      }
+      const lastMs = Math.max(s?.updatedAt ?? 0, mtimeMs);
+      return {
+        pid: p.pid,
+        mem: p.rss,
+        cpu: cpuPercent(p, nowMs),
+        uptimeSec: p.startSec ? nowMs / 1000 - p.startSec : 0,
+        startSec: p.startSec,
+        state: s?.status ?? "?",
+        kind: s?.kind ?? null,
+        sessionId: s?.sessionId ?? null,
+        sessionName: s?.name ?? null,
+        version: s?.version ?? versionFromPath(p.path),
+        host: hostApp(p, byPid),
+        project: cwd,
+        branch: details.branch ?? null,
+        model: details.model ?? null,
+        contextTokens: details.ctx ?? null,
+        lastActivity: lastMs ? new Date(lastMs).toISOString() : null,
+        lastMs,
+        prompt: details.prompt ?? null,
+        transcript: mtimeMs ? transcript : null,
+        children: subprocsOf(p.pid, childrenOf, candidatePids)
+          .sort((a, b) => b.rss - a.rss || a.pid - b.pid)
+          .map((c) => ({
+            pid: c.pid,
+            name: c.name,
+            mem: c.rss,
+            cpu: cpuPercent(c, nowMs),
+            uptimeSec: c.startSec ? nowMs / 1000 - c.startSec : 0,
+          })),
+      };
+    }),
+  );
+
+  const seenAgents = new Set<string>();
+  const rows = await attachSubagentsInOrder(rowBases, nowMs, seenAgents);
 
   // drop cached transcript details for sessions that left the table
   const liveTranscripts = new Set(
-    rows.map((r) => r?.transcript).filter(Boolean),
+    rows.map((r) => r.transcript).filter(Boolean),
   );
   for (const path of transcriptCache.keys()) {
     if (!liveTranscripts.has(path)) transcriptCache.delete(path);
@@ -757,7 +757,7 @@ export async function collectRows(filter: string | null): Promise<Row[]> {
     if (!seenAgents.has(path)) agentCache.delete(path);
   }
 
-  return (rows.filter(Boolean) as Row[])
+  return rows
     .filter((r) => matchRow(r, filter))
     .sort(
       (a, b) =>
