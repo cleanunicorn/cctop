@@ -565,26 +565,36 @@ function resolveProc(
   prefix: string | null,
   depth: number,
   childrenOf: Map<number, Proc[]>,
+  candidatePids: Set<number>,
 ): Proc[] {
-  // A nested Claude (a bg job or sub-session spawned by this one) is itself a
-  // candidate and gets its own top-level row, so it must not also appear here
+  // A nested session (a bg job or sub-session spawned by this one) is itself a
+  // top-level candidate and gets its own row, so it must not also appear here
   // as a sub-process: its versioned exec name ("2.1.177") would land in the
   // name slot — the CTX column on a session row — reading like a stray
   // version where the context should be. Its own children hang off its row.
-  if (isClaudeProc(proc)) return [];
+  // We key off the candidate set rather than isClaudeProc alone so sessions
+  // found only via the registry (and missed by the executable heuristic) are
+  // excluded too — otherwise they would still double-list.
+  if (candidatePids.has(proc.pid)) return [];
   const kids = childrenOf.get(proc.pid) ?? [];
   if (depth < 8 && SHELL_NAMES.has(proc.name) && kids.length) {
     const label = prefix ?? proc.name;
-    return kids.flatMap((k) => resolveProc(k, label, depth + 1, childrenOf));
+    return kids.flatMap((k) =>
+      resolveProc(k, label, depth + 1, childrenOf, candidatePids),
+    );
   }
   if (SHELL_NAMES.has(proc.name)) return []; // childless shell, skip
   const name = prefix ? `${prefix} › ${proc.name}` : proc.name;
   return [{ ...proc, name }];
 }
 
-function subprocsOf(pid: number, childrenOf: Map<number, Proc[]>): Proc[] {
+function subprocsOf(
+  pid: number,
+  childrenOf: Map<number, Proc[]>,
+  candidatePids: Set<number>,
+): Proc[] {
   return (childrenOf.get(pid) ?? []).flatMap((c) =>
-    resolveProc(c, null, 0, childrenOf),
+    resolveProc(c, null, 0, childrenOf, candidatePids),
   );
 }
 
@@ -597,6 +607,9 @@ export async function collectRows(filter: string | null): Promise<Row[]> {
   const candidates = procs.filter(
     (p) => isClaudeProc(p) || sessions.has(p.pid),
   );
+  // every top-level row's PID, so the sub-process tree can exclude all of them
+  // (not just the heuristic-detected ones) and never double-list a session
+  const candidatePids = new Set(candidates.map((p) => p.pid));
 
   const childrenOf = indexChildren(procs);
 
@@ -605,7 +618,8 @@ export async function collectRows(filter: string | null): Promise<Row[]> {
   const current = new Set<number>();
   for (const p of candidates) {
     current.add(p.pid);
-    for (const c of subprocsOf(p.pid, childrenOf)) current.add(c.pid);
+    for (const c of subprocsOf(p.pid, childrenOf, candidatePids))
+      current.add(c.pid);
   }
   for (const pid of cpuSamples.keys()) {
     if (!current.has(pid)) cpuSamples.delete(pid);
@@ -676,7 +690,7 @@ export async function collectRows(filter: string | null): Promise<Row[]> {
       prompt: details.prompt ?? null,
       transcript: mtimeMs ? transcript : null,
       subagents,
-      children: subprocsOf(p.pid, childrenOf)
+      children: subprocsOf(p.pid, childrenOf, candidatePids)
         .sort((a, b) => b.rss - a.rss || a.pid - b.pid)
         .map((c) => ({
           pid: c.pid,

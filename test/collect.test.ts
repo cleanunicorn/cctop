@@ -687,6 +687,13 @@ describe("sub-process resolution", () => {
   });
   // build the parent->children index the same way collectRows does
   const childrenOf = (procs: Proc[]) => __test.indexChildren(procs);
+  // the set of top-level row PIDs collectRows excludes from every tree:
+  // heuristic-detected Claude procs plus any extra registry-only sessions
+  const candidatesOf = (procs: Proc[], sessionPids: number[] = []) =>
+    new Set<number>([
+      ...procs.filter(__test.isClaudeProc).map((p) => p.pid),
+      ...sessionPids,
+    ]);
 
   test("excludes a nested Claude and does not bubble up its children", () => {
     const session = proc({ pid: 100, name: "claude" });
@@ -698,12 +705,32 @@ describe("sub-process resolution", () => {
     });
     const tool = proc({ pid: 102, ppid: 101, name: "go" });
     const idx = childrenOf([session, nested, tool]);
+    const cands = candidatesOf([session, nested, tool]);
 
     // the nested Claude is dropped from its parent's tree, and its own tool
     // child stays with it (it does NOT re-parent onto the session)
-    expect(__test.subprocsOf(100, idx)).toEqual([]);
+    expect(__test.subprocsOf(100, idx, cands)).toEqual([]);
     // the nested Claude lists its own sub-processes on its own row
-    expect(__test.subprocsOf(101, idx).map((p) => p.name)).toEqual(["go"]);
+    expect(__test.subprocsOf(101, idx, cands).map((p) => p.name)).toEqual([
+      "go",
+    ]);
+  });
+
+  test("excludes a nested session known only via the registry", () => {
+    const session = proc({ pid: 400, name: "claude" });
+    // a sub-session whose exec name/path is NOT recognized by isClaudeProc;
+    // it is a top-level row only because it is in the session registry
+    const nested = proc({ pid: 401, ppid: 400, name: "node", path: null });
+    const tool = proc({ pid: 402, ppid: 401, name: "go" });
+    const idx = childrenOf([session, nested, tool]);
+    // registry-only sessions are candidates too, so they must be excluded
+    // from the parent's tree just like heuristic-detected ones
+    const cands = candidatesOf([session, nested, tool], [401]);
+
+    expect(__test.subprocsOf(400, idx, cands)).toEqual([]);
+    expect(__test.subprocsOf(401, idx, cands).map((p) => p.name)).toEqual([
+      "go",
+    ]);
   });
 
   test("descends a wrapping shell to the real command with a single prefix", () => {
@@ -711,7 +738,10 @@ describe("sub-process resolution", () => {
     const shell = proc({ pid: 201, ppid: 200, name: "bash" });
     const cmd = proc({ pid: 202, ppid: 201, name: "go" });
     const idx = childrenOf([session, shell, cmd]);
-    expect(__test.subprocsOf(200, idx).map((p) => p.name)).toEqual(["bash › go"]);
+    const cands = candidatesOf([session, shell, cmd]);
+    expect(__test.subprocsOf(200, idx, cands).map((p) => p.name)).toEqual([
+      "bash › go",
+    ]);
   });
 
   test("drops an idle childless shell but keeps a real direct command", () => {
@@ -719,7 +749,8 @@ describe("sub-process resolution", () => {
     const idleShell = proc({ pid: 301, ppid: 300, name: "zsh" });
     const direct = proc({ pid: 302, ppid: 300, name: "mcp-server" });
     const idx = childrenOf([session, idleShell, direct]);
-    expect(__test.subprocsOf(300, idx).map((p) => p.name)).toEqual([
+    const cands = candidatesOf([session, idleShell, direct]);
+    expect(__test.subprocsOf(300, idx, cands).map((p) => p.name)).toEqual([
       "mcp-server",
     ]);
   });
