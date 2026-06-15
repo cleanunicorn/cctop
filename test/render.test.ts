@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, expect, test } from "bun:test";
-import type { Row, Usage } from "../src/collect.ts";
+import type { Instance, Usage } from "../src/collect.ts";
 import { RED, stripAnsi, YELLOW } from "../src/format.ts";
 import { buildFrame, renderDetail, rowKey, usageLine } from "../src/render.ts";
 
-const baseRow = (overrides: Partial<Row> = {}): Row => ({
+const baseRow = (overrides: Partial<Instance> = {}): Instance => ({
   pid: 12345,
   mem: 512 * 1024 * 1024,
   cpu: 12.3,

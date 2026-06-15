@@ -55,7 +55,7 @@ cctop.ts        entry: CLI arg parsing, non-interactive paths (--once/--json/-h/
 src/proc.ts     process table: macOS libproc FFI / Linux /proc.
                 exports listAllProcesses(), cwdOf()
 src/collect.ts  session discovery + transcript/sub-agent parsing.
-                exports collectRows(filter), matchRow(), Row/SubProc/SubAgent types
+                exports collectRows(filter), matchRow(), Instance/SubProc/SubAgent types
 src/render.ts   pure renderers over rows: buildFrame() (summary/header/groups),
                 renderDetail(), rowKey(); the column table definition lives here
 src/app.ts      interactive runtime: runApp(). AppState, raw-mode input loop,
@@ -64,7 +64,7 @@ src/format.ts   formatting + ANSI helpers (visLen/pad/colors/formatMem/...)
 ```
 
 Data flow: `proc.ts` + the session registry + transcripts → `collect.ts`
-assembles `Row[]` → `render.ts` turns rows into ANSI lines → `cctop.ts` prints
+assembles `Instance[]` → `render.ts` turns rows into ANSI lines → `cctop.ts` prints
 them once, or `app.ts` drives them as a live, navigable TUI.
 
 Data sources (all under `~/.claude`, read-only): the process table; the per-pid

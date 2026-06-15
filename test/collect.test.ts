@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { __test, matchRow, type Row } from "../src/collect.ts";
+import { __test, type Instance, matchRow } from "../src/collect.ts";
 import type { Proc } from "../src/proc.ts";
 
 // A JSONL transcript on disk: one JSON value per line, as Claude Code writes it.
@@ -37,7 +37,7 @@ const user = (content: unknown, extra: Record<string, unknown> = {}) => ({
   ...extra,
 });
 
-const row = (overrides: Partial<Row> = {}): Row => ({
+const row = (overrides: Partial<Instance> = {}): Instance => ({
   pid: 12345,
   mem: 0,
   cpu: 0,

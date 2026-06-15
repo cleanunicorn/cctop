@@ -8,8 +8,8 @@
 
 import {
   collectRows,
+  type Instance,
   matchRow,
-  type Row,
   readUsage,
   type Usage,
 } from "./collect.ts";
@@ -39,12 +39,12 @@ import {
 type Mode = "list" | "detail" | "filter" | "confirm" | "help";
 
 interface ConfirmAction {
-  row: Row;
+  row: Instance;
   signal: "SIGTERM";
 }
 
 interface State {
-  rows: Row[]; // all sessions, unfiltered, sorted by collectRows default
+  rows: Instance[]; // all sessions, unfiltered, sorted by collectRows default
   usage: Usage | null; // account-wide rate limits, or null when not captured
   mode: Mode;
   selectedKey: string | null;
@@ -62,7 +62,7 @@ interface State {
 
 interface SortMode {
   name: string;
-  cmp: (a: Row, b: Row) => number;
+  cmp: (a: Instance, b: Instance) => number;
 }
 
 const SORTS: SortMode[] = [
@@ -142,12 +142,12 @@ export async function runApp(opts: AppOptions): Promise<void> {
       ? state.filterInput.toLowerCase() || null
       : state.filter;
 
-  const displayRows = (): Row[] =>
+  const displayRows = (): Instance[] =>
     state.rows
       .filter((r) => matchRow(r, activeFilter()))
       .sort(SORTS[state.sortIndex].cmp);
 
-  const selectedRow = (rows: Row[]): Row | null => {
+  const selectedRow = (rows: Instance[]): Instance | null => {
     if (!rows.length) return null;
     const i = rows.findIndex((r) => rowKey(r) === state.selectedKey);
     return i >= 0
@@ -157,7 +157,7 @@ export async function runApp(opts: AppOptions): Promise<void> {
 
   // After data/filter/sort changes, keep the cursor on the same session if it
   // is still present; otherwise clamp to the nearest surviving index.
-  const reconcile = (rows: Row[]) => {
+  const reconcile = (rows: Instance[]) => {
     if (!rows.length) {
       state.selectedKey = null;
       state.selectedIndex = 0;
@@ -209,12 +209,12 @@ export async function runApp(opts: AppOptions): Promise<void> {
   };
 
   // --- actions -------------------------------------------------------------
-  const sameSignalTarget = (a: Row, b: Row) =>
+  const sameSignalTarget = (a: Instance, b: Instance) =>
     a.pid === b.pid && rowKey(a) === rowKey(b) && a.startSec === b.startSec;
 
   const doQuit = async (action: ConfirmAction) => {
     const { row, signal } = action;
-    let rows: Row[];
+    let rows: Instance[];
     try {
       rows = await collectRows(null);
     } catch (e: any) {
@@ -680,7 +680,7 @@ export async function runApp(opts: AppOptions): Promise<void> {
     return [...clipped.lines, footer];
   }
 
-  function summaryLines(rows: Row[]): string[] {
+  function summaryLines(rows: Instance[]): string[] {
     // Reuse buildFrame's summary for the (filtered) rows; if empty, a stub.
     // Limits are account-wide, so they show even when no rows match the filter.
     if (!rows.length) {
