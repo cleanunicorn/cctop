@@ -624,6 +624,61 @@ describe("host resolution", () => {
   });
 });
 
+// subprocsOf walks a session's children into the sub-process rows shown beneath
+// it: descending through wrapping shells to the real tool command, dropping idle
+// shells, and excluding nested Claude sessions (which get their own top-level
+// row, so their versioned exec name must never appear as a child).
+describe("sub-process resolution", () => {
+  const proc = (over: Partial<Proc>): Proc => ({
+    pid: 0,
+    ppid: 0,
+    rss: 0,
+    cpuSec: 0,
+    startSec: 0,
+    path: null,
+    name: "node",
+    ...over,
+  });
+  // build the parent->children index the same way collectRows does
+  const childrenOf = (procs: Proc[]) => __test.indexChildren(procs);
+
+  test("excludes a nested Claude and does not bubble up its children", () => {
+    const session = proc({ pid: 100, name: "claude" });
+    const nested = proc({
+      pid: 101,
+      ppid: 100,
+      name: "2.1.177",
+      path: "/u/claude/versions/2.1.177",
+    });
+    const tool = proc({ pid: 102, ppid: 101, name: "go" });
+    const idx = childrenOf([session, nested, tool]);
+
+    // the nested Claude is dropped from its parent's tree, and its own tool
+    // child stays with it (it does NOT re-parent onto the session)
+    expect(__test.subprocsOf(100, idx)).toEqual([]);
+    // the nested Claude lists its own sub-processes on its own row
+    expect(__test.subprocsOf(101, idx).map((p) => p.name)).toEqual(["go"]);
+  });
+
+  test("descends a wrapping shell to the real command with a single prefix", () => {
+    const session = proc({ pid: 200, name: "claude" });
+    const shell = proc({ pid: 201, ppid: 200, name: "bash" });
+    const cmd = proc({ pid: 202, ppid: 201, name: "go" });
+    const idx = childrenOf([session, shell, cmd]);
+    expect(__test.subprocsOf(200, idx).map((p) => p.name)).toEqual(["bash › go"]);
+  });
+
+  test("drops an idle childless shell but keeps a real direct command", () => {
+    const session = proc({ pid: 300, name: "claude" });
+    const idleShell = proc({ pid: 301, ppid: 300, name: "zsh" });
+    const direct = proc({ pid: 302, ppid: 300, name: "mcp-server" });
+    const idx = childrenOf([session, idleShell, direct]);
+    expect(__test.subprocsOf(300, idx).map((p) => p.name)).toEqual([
+      "mcp-server",
+    ]);
+  });
+});
+
 // cpuPercent is top-style: the delta between two samples once it has a prior,
 // or the lifetime average on the first sample. PID reuse can make the counter
 // go backwards, which must clamp to 0 rather than report a negative spike.

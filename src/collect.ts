@@ -141,6 +141,8 @@ export const __test = {
   cpuPercent,
   isClaudeProc,
   versionFromPath,
+  indexChildren,
+  subprocsOf,
 };
 
 function readSessions(): Map<number, Session> {
@@ -540,6 +542,52 @@ function cpuPercent(p: Proc, nowMs: number) {
   return elapsed > 0 ? (p.cpuSec / elapsed) * 100 : 0;
 }
 
+// index every process by its parent so each session can list the
+// sub-processes it spawned (tool shells, MCP servers, caffeinate...)
+function indexChildren(procs: Proc[]): Map<number, Proc[]> {
+  const childrenOf = new Map<number, Proc[]>();
+  for (const c of procs) {
+    const arr = childrenOf.get(c.ppid);
+    if (arr) arr.push(c);
+    else childrenOf.set(c.ppid, [c]);
+  }
+  return childrenOf;
+}
+
+// A session's effective sub-processes: descend through shells running tool
+// commands (claude's Bash tool spawns `bash -c '...'`, occasionally nested)
+// down to the real command, keeping the outermost shell as a single prefix
+// so context is preserved without piling up layers ("bash › go", not
+// "bash › bash › go"). A shell with nothing under it is just an idle
+// wrapper between commands and is dropped. The depth cap guards cycles.
+function resolveProc(
+  proc: Proc,
+  prefix: string | null,
+  depth: number,
+  childrenOf: Map<number, Proc[]>,
+): Proc[] {
+  // A nested Claude (a bg job or sub-session spawned by this one) is itself a
+  // candidate and gets its own top-level row, so it must not also appear here
+  // as a sub-process: its versioned exec name ("2.1.177") would land in the
+  // name slot — the CTX column on a session row — reading like a stray
+  // version where the context should be. Its own children hang off its row.
+  if (isClaudeProc(proc)) return [];
+  const kids = childrenOf.get(proc.pid) ?? [];
+  if (depth < 8 && SHELL_NAMES.has(proc.name) && kids.length) {
+    const label = prefix ?? proc.name;
+    return kids.flatMap((k) => resolveProc(k, label, depth + 1, childrenOf));
+  }
+  if (SHELL_NAMES.has(proc.name)) return []; // childless shell, skip
+  const name = prefix ? `${prefix} › ${proc.name}` : proc.name;
+  return [{ ...proc, name }];
+}
+
+function subprocsOf(pid: number, childrenOf: Map<number, Proc[]>): Proc[] {
+  return (childrenOf.get(pid) ?? []).flatMap((c) =>
+    resolveProc(c, null, 0, childrenOf),
+  );
+}
+
 export async function collectRows(filter: string | null): Promise<Row[]> {
   const nowMs = Date.now();
   const procs = listAllProcesses();
@@ -550,50 +598,14 @@ export async function collectRows(filter: string | null): Promise<Row[]> {
     (p) => isClaudeProc(p) || sessions.has(p.pid),
   );
 
-  // index every process by its parent so each session can list the
-  // sub-processes it spawned (tool shells, MCP servers, caffeinate...)
-  const childrenOf = new Map<number, Proc[]>();
-  for (const c of procs) {
-    const arr = childrenOf.get(c.ppid);
-    if (arr) arr.push(c);
-    else childrenOf.set(c.ppid, [c]);
-  }
-
-  // A session's effective sub-processes: descend through shells running tool
-  // commands (claude's Bash tool spawns `bash -c '...'`, occasionally nested)
-  // down to the real command, keeping the outermost shell as a single prefix
-  // so context is preserved without piling up layers ("bash › go", not
-  // "bash › bash › go"). A shell with nothing under it is just an idle
-  // wrapper between commands and is dropped. The depth cap guards cycles.
-  const resolveProc = (
-    proc: Proc,
-    prefix: string | null,
-    depth: number,
-  ): Proc[] => {
-    // A nested Claude (a bg job or sub-session spawned by this one) is itself a
-    // candidate and gets its own top-level row, so it must not also appear here
-    // as a sub-process: its versioned exec name ("2.1.177") would land in the
-    // name slot — the CTX column on a session row — reading like a stray
-    // version where the context should be. Its own children hang off its row.
-    if (isClaudeProc(proc)) return [];
-    const kids = childrenOf.get(proc.pid) ?? [];
-    if (depth < 8 && SHELL_NAMES.has(proc.name) && kids.length) {
-      const label = prefix ?? proc.name;
-      return kids.flatMap((k) => resolveProc(k, label, depth + 1));
-    }
-    if (SHELL_NAMES.has(proc.name)) return []; // childless shell, skip
-    const name = prefix ? `${prefix} › ${proc.name}` : proc.name;
-    return [{ ...proc, name }];
-  };
-  const subprocsOf = (pid: number) =>
-    (childrenOf.get(pid) ?? []).flatMap((c) => resolveProc(c, null, 0));
+  const childrenOf = indexChildren(procs);
 
   // drop samples of processes that left the table, so the map stays small;
   // keep sessions and their sub-processes, both of which show a live %CPU
   const current = new Set<number>();
   for (const p of candidates) {
     current.add(p.pid);
-    for (const c of subprocsOf(p.pid)) current.add(c.pid);
+    for (const c of subprocsOf(p.pid, childrenOf)) current.add(c.pid);
   }
   for (const pid of cpuSamples.keys()) {
     if (!current.has(pid)) cpuSamples.delete(pid);
@@ -664,7 +676,7 @@ export async function collectRows(filter: string | null): Promise<Row[]> {
       prompt: details.prompt ?? null,
       transcript: mtimeMs ? transcript : null,
       subagents,
-      children: subprocsOf(p.pid)
+      children: subprocsOf(p.pid, childrenOf)
         .sort((a, b) => b.rss - a.rss || a.pid - b.pid)
         .map((c) => ({
           pid: c.pid,
