@@ -608,6 +608,152 @@ describe("host resolution", () => {
     const orphan = proc({ pid: 50, ppid: 1 });
     expect(__test.hostApp(orphan, tree([orphan]))).toBe("?");
   });
+
+  // A bg job / sub-session is hosted by the Claude that spawned it; the parent
+  // carries the versioned exec name ("2.1.177"), which must read as "claude"
+  // rather than leak the version into the HOST column.
+  test("reports a nested Claude parent (versioned path) as 'claude'", () => {
+    const child = proc({ pid: 60, ppid: 61 });
+    const parent = proc({
+      pid: 61,
+      ppid: 1,
+      name: "2.1.177",
+      path: "/u/claude/versions/2.1.177",
+    });
+    expect(__test.hostApp(child, tree([child, parent]))).toBe("claude");
+  });
+
+  // the other isClaudeProc branch: a normally-launched parent Claude is named
+  // "claude" with no versioned path — the common nesting case
+  test("reports a nested Claude parent (named 'claude') as 'claude'", () => {
+    const child = proc({ pid: 70, ppid: 71 });
+    const parent = proc({ pid: 71, ppid: 1, name: "claude", path: null });
+    expect(__test.hostApp(child, tree([child, parent]))).toBe("claude");
+  });
+
+  // ordering the fix depends on: the Claude check sits AFTER the .app bundle
+  // match, so a nearer terminal bundle still wins over a Claude further up.
+  test("a nearer app bundle wins over a Claude ancestor above it", () => {
+    const child = proc({ pid: 80, ppid: 81 });
+    const term = proc({
+      pid: 81,
+      ppid: 82,
+      name: "Ghostty",
+      path: "/Applications/Ghostty.app/Contents/MacOS/ghostty",
+    });
+    const claudeAbove = proc({
+      pid: 82,
+      ppid: 1,
+      name: "2.1.177",
+      path: "/u/claude/versions/2.1.177",
+    });
+    expect(__test.hostApp(child, tree([child, term, claudeAbove]))).toBe(
+      "Ghostty",
+    );
+  });
+
+  // ...but the Claude check sits BEFORE the first-real-program fallback, so a
+  // Claude ancestor short-circuits and is never shadowed by a deeper program
+  test("a Claude ancestor short-circuits before a deeper program", () => {
+    const child = proc({ pid: 90, ppid: 91 });
+    const shell = proc({ pid: 91, ppid: 92, name: "zsh" });
+    const claudeParent = proc({
+      pid: 92,
+      ppid: 93,
+      name: "2.1.177",
+      path: "/u/claude/versions/2.1.177",
+    });
+    const node = proc({ pid: 93, ppid: 1, name: "node" });
+    expect(
+      __test.hostApp(child, tree([child, shell, claudeParent, node])),
+    ).toBe("claude");
+  });
+});
+
+// subprocsOf walks a session's children into the sub-process rows shown beneath
+// it: descending through wrapping shells to the real tool command, dropping idle
+// shells, and excluding nested Claude sessions (which get their own top-level
+// row, so their versioned exec name must never appear as a child).
+describe("sub-process resolution", () => {
+  const proc = (over: Partial<Proc>): Proc => ({
+    pid: 0,
+    ppid: 0,
+    rss: 0,
+    cpuSec: 0,
+    startSec: 0,
+    path: null,
+    name: "node",
+    ...over,
+  });
+  // build the parent->children index the same way collectRows does
+  const childrenOf = (procs: Proc[]) => __test.indexChildren(procs);
+  // the set of top-level row PIDs collectRows excludes from every tree:
+  // heuristic-detected Claude procs plus any extra registry-only sessions
+  const candidatesOf = (procs: Proc[], sessionPids: number[] = []) =>
+    new Set<number>([
+      ...procs.filter(__test.isClaudeProc).map((p) => p.pid),
+      ...sessionPids,
+    ]);
+
+  test("excludes a nested Claude and does not bubble up its children", () => {
+    const session = proc({ pid: 100, name: "claude" });
+    const nested = proc({
+      pid: 101,
+      ppid: 100,
+      name: "2.1.177",
+      path: "/u/claude/versions/2.1.177",
+    });
+    const tool = proc({ pid: 102, ppid: 101, name: "go" });
+    const idx = childrenOf([session, nested, tool]);
+    const cands = candidatesOf([session, nested, tool]);
+
+    // the nested Claude is dropped from its parent's tree, and its own tool
+    // child stays with it (it does NOT re-parent onto the session)
+    expect(__test.subprocsOf(100, idx, cands)).toEqual([]);
+    // the nested Claude lists its own sub-processes on its own row
+    expect(__test.subprocsOf(101, idx, cands).map((p) => p.name)).toEqual([
+      "go",
+    ]);
+  });
+
+  test("excludes a nested session known only via the registry", () => {
+    const session = proc({ pid: 400, name: "claude" });
+    // a sub-session whose exec name/path is NOT recognized by isClaudeProc;
+    // it is a top-level row only because it is in the session registry
+    const nested = proc({ pid: 401, ppid: 400, name: "node", path: null });
+    const tool = proc({ pid: 402, ppid: 401, name: "go" });
+    const idx = childrenOf([session, nested, tool]);
+    // registry-only sessions are candidates too, so they must be excluded
+    // from the parent's tree just like heuristic-detected ones
+    const cands = candidatesOf([session, nested, tool], [401]);
+
+    expect(__test.subprocsOf(400, idx, cands)).toEqual([]);
+    expect(__test.subprocsOf(401, idx, cands).map((p) => p.name)).toEqual([
+      "go",
+    ]);
+  });
+
+  test("descends a wrapping shell to the real command with a single prefix", () => {
+    const session = proc({ pid: 200, name: "claude" });
+    const shell = proc({ pid: 201, ppid: 200, name: "bash" });
+    const cmd = proc({ pid: 202, ppid: 201, name: "go" });
+    const idx = childrenOf([session, shell, cmd]);
+    const cands = candidatesOf([session, shell, cmd]);
+    expect(__test.subprocsOf(200, idx, cands).map((p) => p.name)).toEqual([
+      "bash › go",
+    ]);
+  });
+
+  test("drops an idle childless shell but keeps a real direct command", () => {
+    const session = proc({ pid: 300, name: "claude" });
+    const idleShell = proc({ pid: 301, ppid: 300, name: "zsh" });
+    const direct = proc({ pid: 302, ppid: 300, name: "mcp-server" });
+    const idx = childrenOf([session, idleShell, direct]);
+    const cands = candidatesOf([session, idleShell, direct]);
+    expect(__test.subprocsOf(300, idx, cands).map((p) => p.name)).toEqual([
+      "mcp-server",
+    ]);
+  });
 });
 
 // cpuPercent is top-style: the delta between two samples once it has a prior,

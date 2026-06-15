@@ -76,8 +76,13 @@ The `HOST` column is resolved by walking each session's process ancestry past
 shells and wrappers to the first app bundle or recognizable program (iTerm,
 Ghostty, VS Code, a JetBrains IDE, tmux, sshd…); see `HOST_SKIP` in `collect.ts`.
 Sub-process rows skip a tool's wrapping shell so the real command shows
-(`bash › go test`). Live sub-agents (`Task`/`Workflow`) run in-process, so they
-never hit the process table — they are read from the `subagents/` transcripts.
+(`bash › go test`). A Claude session spawned by another Claude (a background job
+or sub-session) is the exception: it gets its own top-level row rather than
+appearing as a sub-process of its parent, and its `HOST` reads `claude` (the
+parent) instead of the nested process's versioned exec name (`2.1.177`) — both
+keyed off the same `isClaudeProc` check. Live sub-agents (`Task`/`Workflow`) run
+in-process, so they never hit the process table — they are read from the
+`subagents/` transcripts.
 
 ## Critical gotchas — read before editing
 
