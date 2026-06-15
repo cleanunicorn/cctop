@@ -503,6 +503,10 @@ function hostApp(proc: Proc, byPid: Map<number, Proc>): string {
     if (!p || p.pid <= 1) break;
     const app = p.path?.match(/\/([^/]+)\.app\//); // outermost bundle
     if (app) return app[1];
+    // a session spawned by another Claude (a bg job / sub-session) is hosted by
+    // that parent; report it as "claude" rather than the versioned exec name
+    // ("2.1.177") the nested process carries
+    if (isClaudeProc(p)) return "claude";
     const base = (p.name ?? "").toLowerCase();
     if (base.startsWith("tmux")) return "tmux";
     if (base.startsWith("sshd")) return "ssh";
@@ -566,6 +570,12 @@ export async function collectRows(filter: string | null): Promise<Row[]> {
     prefix: string | null,
     depth: number,
   ): Proc[] => {
+    // A nested Claude (a bg job or sub-session spawned by this one) is itself a
+    // candidate and gets its own top-level row, so it must not also appear here
+    // as a sub-process: its versioned exec name ("2.1.177") would land in the
+    // name slot — the CTX column on a session row — reading like a stray
+    // version where the context should be. Its own children hang off its row.
+    if (isClaudeProc(proc)) return [];
     const kids = childrenOf.get(proc.pid) ?? [];
     if (depth < 8 && SHELL_NAMES.has(proc.name) && kids.length) {
       const label = prefix ?? proc.name;

@@ -608,6 +608,20 @@ describe("host resolution", () => {
     const orphan = proc({ pid: 50, ppid: 1 });
     expect(__test.hostApp(orphan, tree([orphan]))).toBe("?");
   });
+
+  // A bg job / sub-session is hosted by the Claude that spawned it; the parent
+  // carries the versioned exec name ("2.1.177"), which must read as "claude"
+  // rather than leak the version into the HOST column.
+  test("reports a nested Claude parent as 'claude'", () => {
+    const child = proc({ pid: 60, ppid: 61 });
+    const parent = proc({
+      pid: 61,
+      ppid: 1,
+      name: "2.1.177",
+      path: "/u/claude/versions/2.1.177",
+    });
+    expect(__test.hostApp(child, tree([child, parent]))).toBe("claude");
+  });
 });
 
 // cpuPercent is top-style: the delta between two samples once it has a prior,
