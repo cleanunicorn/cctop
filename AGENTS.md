@@ -21,6 +21,13 @@ an interactive TUI; piped or with `--once`/`--json` it prints one frame.
   devDependencies are just Biome/tsc/types). Do not add npm packages — keep it
   dependency-free.
 
+## Bun docs MCP server
+
+This repo ships a project-scoped MCP server in `.mcp.json`.
+Use the `bun-docs` MCP to look up Bun APIs and behavior instead of guessing.
+It exposes `search_bun` (semantic search) and
+`query_docs_filesystem_bun` (`rg`/`cat`/`head` over the docs).
+
 ## Commands
 
 Use the Makefile (thin wrappers over `package.json` scripts; `bun run <x>`
