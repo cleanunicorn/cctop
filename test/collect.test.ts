@@ -612,7 +612,7 @@ describe("host resolution", () => {
   // A bg job / sub-session is hosted by the Claude that spawned it; the parent
   // carries the versioned exec name ("2.1.177"), which must read as "claude"
   // rather than leak the version into the HOST column.
-  test("reports a nested Claude parent as 'claude'", () => {
+  test("reports a nested Claude parent (versioned path) as 'claude'", () => {
     const child = proc({ pid: 60, ppid: 61 });
     const parent = proc({
       pid: 61,
@@ -621,6 +621,52 @@ describe("host resolution", () => {
       path: "/u/claude/versions/2.1.177",
     });
     expect(__test.hostApp(child, tree([child, parent]))).toBe("claude");
+  });
+
+  // the other isClaudeProc branch: a normally-launched parent Claude is named
+  // "claude" with no versioned path — the common nesting case
+  test("reports a nested Claude parent (named 'claude') as 'claude'", () => {
+    const child = proc({ pid: 70, ppid: 71 });
+    const parent = proc({ pid: 71, ppid: 1, name: "claude", path: null });
+    expect(__test.hostApp(child, tree([child, parent]))).toBe("claude");
+  });
+
+  // ordering the fix depends on: the Claude check sits AFTER the .app bundle
+  // match, so a nearer terminal bundle still wins over a Claude further up.
+  test("a nearer app bundle wins over a Claude ancestor above it", () => {
+    const child = proc({ pid: 80, ppid: 81 });
+    const term = proc({
+      pid: 81,
+      ppid: 82,
+      name: "Ghostty",
+      path: "/Applications/Ghostty.app/Contents/MacOS/ghostty",
+    });
+    const claudeAbove = proc({
+      pid: 82,
+      ppid: 1,
+      name: "2.1.177",
+      path: "/u/claude/versions/2.1.177",
+    });
+    expect(__test.hostApp(child, tree([child, term, claudeAbove]))).toBe(
+      "Ghostty",
+    );
+  });
+
+  // ...but the Claude check sits BEFORE the first-real-program fallback, so a
+  // Claude ancestor short-circuits and is never shadowed by a deeper program
+  test("a Claude ancestor short-circuits before a deeper program", () => {
+    const child = proc({ pid: 90, ppid: 91 });
+    const shell = proc({ pid: 91, ppid: 92, name: "zsh" });
+    const claudeParent = proc({
+      pid: 92,
+      ppid: 93,
+      name: "2.1.177",
+      path: "/u/claude/versions/2.1.177",
+    });
+    const node = proc({ pid: 93, ppid: 1, name: "node" });
+    expect(
+      __test.hostApp(child, tree([child, shell, claudeParent, node])),
+    ).toBe("claude");
   });
 });
 
