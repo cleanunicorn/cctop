@@ -37,7 +37,7 @@ works too):
 make deps       # bun install
 make run        # run the TUI (make run ARGS="flux" to pass a filter)
 make dev        # run with --watch live reload
-make lint       # biome check --write . && tsc --noEmit   (format + lint + types)
+make lint       # bun biome check --write . && bun tsc --noEmit  (format + lint + types)
 make build      # compile a standalone binary into bin/
 make clean      # remove bin/ and stray .bun-build files
 make update     # bun update (within semver ranges)
@@ -119,11 +119,12 @@ in-process, so they never hit the process table — they are read from the
 
 ## Conventions
 
+- **Bun-only toolchain.** Bun is assumed to be the *only* runtime present — no Node.
 - **Style is enforced by Biome** (`biome.json`): 2-space indent, double quotes,
   semicolons, trailing commas, ~80 col. Three rules are intentionally off —
   `noExplicitAny` (FFI/JSON parsing), `noControlCharactersInRegex` (the ANSI
   `\x1b` regex), `noNonNullAssertion`.
-- **Types** are checked by `tsc --noEmit` (part of `make lint`). Keep it green.
+- **Types** are checked by `bun tsc --noEmit` (part of `make lint`). Keep it green.
 - **Comments explain *why*, not *what*** — match the existing density. The FFI
   struct offsets and the sync-I/O rationale are load-bearing comments; keep them.
 - **Version is single-sourced** in `package.json`; `cctop.ts` derives
