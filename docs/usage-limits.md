@@ -13,34 +13,18 @@ Limits: 8% 7d (2d9h left)  60% 5h (2h32m left)
 
 The percentages heat toward red as they climb, like the CPU and context columns.
 
-## Why this needs a status-line hook
-
-cctop is read-only: it reads `~/.claude` and the process table, and makes no
-network calls. Claude Code surfaces the limits in exactly two places:
-the interactive `/usage` panel, and the`rate_limits` object it passes
-to your configured **status-line command** on stdin, once per turn.
-
-So the data already flows past your status line for free. The setup below taps
-that stream and writes the latest snapshot to `~/.claude/cctop/usage.json`, which
-cctop then reads like any other file — no API key, no network, no stored
-secrets. (The only alternative source, the Anthropic OAuth usage endpoint, would
-require reading your subscription token and making network calls, which cctop
-deliberately does not do.)
-
-This is **opt-in**: without the hook, cctop simply omits the `Limits:` line.
-
 ## Setup
 
 You configure a status-line command in `~/.claude/settings.json`. The tap is a
-small block added to that command's script — it reads the JSON Claude Code sends
+small block added to that command's script. It reads the JSON Claude Code sends
 on stdin and persists the `rate_limits` object.
 
 If you don't have a status-line script yet, create one (e.g.
-`~/.claude/status/statusline.sh`) and point `settings.json` at it:
+`~/.claude/statusline.sh`) and point `settings.json` at it:
 
 ```json
 {
-  "statusLine": { "type": "command", "command": "bash \"$HOME/.claude/status/statusline.sh\"" }
+  "statusLine": { "type": "command", "command": "bash \"$HOME/.claude/statusline.sh\"" }
 }
 ```
 
@@ -49,46 +33,50 @@ Then add the tap near the top of the script, right after you read stdin:
 ```bash
 input=$(cat)
 
-# cctop usage tap: persist the account-wide 5h/7d rate limits in cctop/usage.json
-# docs: https://github.com/stefanprodan/cctop/blob/main/docs/usage-limits.md
-{
-  cctop_dir="$HOME/.claude/cctop"; cctop_f="$cctop_dir/usage.json"
-  cctop_now=$(date +%s)
-  cctop_mt=$(stat -f %m "$cctop_f" 2>/dev/null || stat -c %Y "$cctop_f" 2>/dev/null || echo 0)
-  if [ $(( cctop_now - cctop_mt )) -ge 30 ]; then
-    cctop_snap=$(echo "$input" \
-      | jq -c '.rate_limits | objects | select(length > 0)
-               | {rate_limits: ., captured_at: (now|floor)}' 2>/dev/null)
-    if [ -n "$cctop_snap" ]; then
-      mkdir -p "$cctop_dir"
-      cctop_tmp=$(mktemp "$cctop_dir/usage.json.XXXXXX") \
-        && printf '%s' "$cctop_snap" > "$cctop_tmp" \
-        && mv -f "$cctop_tmp" "$cctop_f"
-    fi
-  fi
-} || true
+# persist the account-wide 5h/7d rate limits
+printf '%s' "$input" | cctop --capture-usage || true
 
-# ... the rest of your status-line rendering ...
+# ... the rest of your status-line rendering, using "$input" ...
 ```
 
-The only dependency is [`jq`](https://jqlang.github.io/jq/).
+The`cctop --capture-usage` reads the payload on stdin and
+writes the snapshot; the `|| true` keeps a missing or failed `cctop` from
+tripping a status line that runs under `set -e`.
 
 ### What it does and why it's safe
 
-The tap reads the same stdin Claude Code already gives your status line and
-writes the `rate_limits` object to `~/.claude/cctop/usage.json`. It is
-best-effort and self-contained — the whole block is wrapped in `{ … } || true`,
-so even under `set -euo pipefail` a failure here can never break your status
-line. It is also cheap and robust under many concurrent sessions:
+`cctop --capture-usage` reads the same stdin Claude Code already gives your
+status line and writes the `rate_limits` object to `~/.claude/cctop/usage.json`.
+It is best-effort and cannot disrupt your status line:
 
+- **Silent and non-failing** — it prints nothing (your status line's stdout is
+  its rendered text) and always exits 0, even on a malformed payload, so it is
+  safe even under `set -euo pipefail` (the `|| true` only guards `cctop` itself
+  being absent from `PATH`).
 - **Throttled** to ~once per 30s across all sessions (via the file's mtime), so a
-  burst of turns or dozens of running instances doesn't spam `jq` and writes.
-- **Race-free** — each writer uses its own `mktemp` plus an atomic rename, so
-  concurrent taps never corrupt the file (last writer wins; the data is
-  identical account-wide anyway).
+  burst of turns or dozens of running instances doesn't spam writes.
+- **Race-free** — each write goes to a temp file and is renamed into place
+  atomically, so concurrent taps never corrupt the file (last writer wins; the
+  data is identical account-wide anyway).
 - **Non-destructive** — only a non-empty `rate_limits` object is written, so a
   missing / `null` / `{}` payload (before the first turn, or on API-key
   accounts) never clobbers a good snapshot.
+
+## Why this needs a status-line hook
+
+cctop is read-only: it reads `~/.claude` and the process table, and makes no
+network calls. Claude Code surfaces the limits in exactly two places:
+the interactive `/usage` panel, and the`rate_limits` object it passes
+to your configured **status-line command** on stdin, once per turn.
+
+So the data already flows past your status line for free. The setup taps
+that stream and writes the latest snapshot to `~/.claude/cctop/usage.json`, which
+cctop then reads like any other file — no API key, no network, no stored
+secrets. (The only alternative source, the Anthropic OAuth usage endpoint, would
+require reading your subscription token and making network calls, which cctop
+deliberately does not do.)
+
+This is **opt-in**: without the hook, cctop simply omits the `Limits:` line.
 
 ## The file cctop reads
 

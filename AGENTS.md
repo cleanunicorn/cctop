@@ -87,12 +87,13 @@ in-process, so they never hit the process table — they are read from the
 ## Critical gotchas — read before editing
 
 1. **File *contents* go through `Bun.file` async (`.json()`,
-   `.slice().bytes()`); `node:fs` is only for `readdirSync`/`statSync`.** The
-   async reads are deliberate: `collectRows` overlaps every session's
-   transcript and registry/usage JSON reads with `Promise.all`, so the whole
-   scan runs concurrently. Keep it that way. `readdirSync`/`statSync` (directory
-   listing + mtime/birthtime metadata) stay synchronous — they have no
-   `Bun.file` equivalent.
+   `.slice().bytes()`, `Bun.write()`); `node:fs` is only for directory and
+   metadata ops (`readdirSync`/`statSync`/`mkdirSync`/`renameSync`).** The async
+   reads are deliberate: `collectRows` overlaps every session's transcript and
+   registry/usage JSON reads with `Promise.all`, so the whole scan runs
+   concurrently. Keep it that way. The `node:fs` calls (directory listing,
+   mtime/birthtime, and the `--capture-usage` mkdir + atomic temp-file rename)
+   stay synchronous — they have no `Bun.file` equivalent.
 
 2. **Non-interactive parity is a contract.** `--once`, `--json`, and piped
    output (`isTTY` false) must keep producing a single plain frame and exit, so

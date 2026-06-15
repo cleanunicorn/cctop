@@ -68,45 +68,21 @@ bun install -g github:stefanprodan/cctop --force
 bun uninstall -g cctop
 ```
 
-## Weekly usage limits
+## Usage limits (opt-in)
 
-cctop can show your Claude subscription's rate-limit usage in the summary line:
-
-```
-Limits: 8% 7d (2d9h left)  60% 5h (2h32m left)
-```
-
-This is opt-in and needs a one-time status-line script (the limits aren't stored
-on disk otherwise). See [docs/usage-limits.md](docs/usage-limits.md) for the
-two-step setup; the tap is below.
-
-<details>
-<summary>Status-line tap (add to your <code>statusLine</code> script, needs <code>jq</code>)</summary>
+To display the subscription's rate-limit usage, add the following to
+your Claude Code [status-line](https://code.claude.com/docs/en/statusline) script:
 
 ```bash
 input=$(cat)
 
-# cctop usage tap: persist the account-wide 5h/7d rate limits in cctop/usage.json
-# docs: https://github.com/stefanprodan/cctop/blob/main/docs/usage-limits.md
-{
-  cctop_dir="$HOME/.claude/cctop"; cctop_f="$cctop_dir/usage.json"
-  cctop_now=$(date +%s)
-  cctop_mt=$(stat -f %m "$cctop_f" 2>/dev/null || stat -c %Y "$cctop_f" 2>/dev/null || echo 0)
-  if [ $(( cctop_now - cctop_mt )) -ge 30 ]; then
-    cctop_snap=$(echo "$input" \
-      | jq -c '.rate_limits | objects | select(length > 0)
-               | {rate_limits: ., captured_at: (now|floor)}' 2>/dev/null)
-    if [ -n "$cctop_snap" ]; then
-      mkdir -p "$cctop_dir"
-      cctop_tmp=$(mktemp "$cctop_dir/usage.json.XXXXXX") \
-        && printf '%s' "$cctop_snap" > "$cctop_tmp" \
-        && mv -f "$cctop_tmp" "$cctop_f"
-    fi
-  fi
-} || true
+# persist the account-wide 5h/7d rate limits
+printf '%s' "$input" | cctop --capture-usage || true
 ```
 
-</details>
+With `--capture-usage` the rate limits stats are persisted to
+`~/.claude/cctop/usage.json` from which the cctop TUI reads.
+See [docs/usage-limits.md](docs/usage-limits.md) for more details.
 
 ## Usage
 

@@ -11,7 +11,12 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { __test, type Instance, matchRow } from "../src/collect.ts";
+import {
+  __test,
+  captureUsage,
+  type Instance,
+  matchRow,
+} from "../src/collect.ts";
 import type { Proc } from "../src/proc.ts";
 
 // A JSONL transcript on disk: one JSON value per line, as Claude Code writes it.
@@ -932,5 +937,62 @@ describe("usage snapshot parsing", () => {
       fiveHourResetsAt: null,
       capturedAt: null,
     });
+  });
+});
+
+describe("usage capture (captureUsage)", () => {
+  let dir: string;
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), "cctop-usage-"));
+  });
+  afterAll(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const payload = (rl: unknown) => JSON.stringify({ rate_limits: rl });
+  const limits = {
+    five_hour: { used_percentage: 60, resets_at: 1781544600 },
+    seven_day: { used_percentage: 8, resets_at: 1781568000 },
+  };
+
+  test("writes a snapshot that round-trips through parseUsage", async () => {
+    const f = join(dir, "ok.json");
+    expect(await captureUsage(payload(limits), f)).toBe(true);
+    const raw = await Bun.file(f).json();
+    expect(raw.rate_limits).toEqual(limits);
+    expect(typeof raw.captured_at).toBe("number");
+    expect(__test.parseUsage(raw)).toEqual({
+      sevenDayPct: 8,
+      sevenDayResetsAt: 1781568000,
+      fiveHourPct: 60,
+      fiveHourResetsAt: 1781544600,
+      capturedAt: raw.captured_at,
+    });
+  });
+
+  test("throttles repeat writes within the 30s window", async () => {
+    const f = join(dir, "throttle.json");
+    expect(await captureUsage(payload(limits), f)).toBe(true);
+    expect(await captureUsage(payload(limits), f)).toBe(false); // too soon
+    // backdate past the window → writes again
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(f, old, old);
+    expect(await captureUsage(payload(limits), f)).toBe(true);
+  });
+
+  test("ignores missing / empty / non-object rate_limits", async () => {
+    expect(await captureUsage(JSON.stringify({}), join(dir, "a.json"))).toBe(
+      false,
+    );
+    expect(await captureUsage(payload({}), join(dir, "b.json"))).toBe(false);
+    expect(await captureUsage(payload(null), join(dir, "c.json"))).toBe(false);
+    expect(await captureUsage(payload([1, 2]), join(dir, "d.json"))).toBe(
+      false,
+    );
+  });
+
+  test("never throws on invalid input", async () => {
+    expect(await captureUsage("not json", join(dir, "e.json"))).toBe(false);
+    expect(await captureUsage("", join(dir, "f.json"))).toBe(false);
   });
 });
