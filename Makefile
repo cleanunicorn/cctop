@@ -45,7 +45,7 @@ install: ## Compile and install onto PATH (override PREFIX=...)
 uninstall: ## Remove the installed binary (override PREFIX=...)
 	@PREFIX="$(PREFIX)" bun run uninstall:bin
 
-pre-release: ## Bump the version (VERSION=patch|minor|major|x.y.z) and open a release PR
+pre-release: ## Bump the version (VERSION=patch|minor|major|x.y.z) in package.json + README and open a release PR
 	@command -v gh >/dev/null 2>&1 || { echo "error: gh CLI is required"; exit 1; }
 	@test -z "$$(git status --porcelain)" || { echo "error: working tree is dirty; commit or stash first"; exit 1; }
 	@git fetch --quiet origin main
@@ -54,7 +54,8 @@ pre-release: ## Bump the version (VERSION=patch|minor|major|x.y.z) and open a re
 	@new="$$(bun pm pkg get version | tr -d '\"')"; \
 		branch="release-v$$new"; \
 		git switch --quiet -c "$$branch"; \
-		git commit --quiet -m "release: v$$new" package.json; \
+		sed -i.bak -E "s|cctop#v[0-9A-Za-z.+-]+|cctop#v$$new|g" README.md && rm -f README.md.bak; \
+		git commit --quiet -m "release: v$$new" package.json README.md; \
 		git push --quiet -u origin "$$branch"; \
 		gh pr create --base main --head "$$branch" \
 			--title "release: v$$new" \

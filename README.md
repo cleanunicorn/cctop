@@ -37,14 +37,13 @@ waiting for input.
 Install `cctop` globally with:
 
 ```sh
-bun install -g github:stefanprodan/cctop
+bun install -g github:stefanprodan/cctop#v0.0.1
 ```
 
 This puts a `cctop` command in `~/.bun/bin` (add it to your `PATH` with `export PATH="$HOME/.bun/bin:$PATH"`).
 
 Prefer not to install Bun? Each [release](https://github.com/stefanprodan/cctop/releases)
-ships standalone binaries for macOS and Linux (`amd64`/`arm64`) with Bun bundled
-in — no runtime needed. Download cctop and install with:
+ships standalone binaries for macOS and Linux (`amd64`/`arm64`). Download cctop and install with:
 
 ```sh
 # macOS arm64 — swap darwin_arm64 for darwin_amd64 / linux_amd64 / linux_arm64
@@ -52,14 +51,12 @@ curl -fsSL https://github.com/stefanprodan/cctop/releases/latest/download/cctop_
 install -m 0755 cctop /usr/local/bin/cctop
 ```
 
-You can now run it with `cctop` in your terminal.
-
 ### Update
 
-Pull the latest version with:
+Upgrade by installing the latest [release](https://github.com/stefanprodan/cctop/releases) tag:
 
 ```sh
-bun install -g github:stefanprodan/cctop --force
+bun install -g github:stefanprodan/cctop#v0.0.1
 ```
 
 ### Uninstall
