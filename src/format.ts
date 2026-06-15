@@ -22,7 +22,10 @@ export const BLUE_BG = "\x1b[104m";
 const ANSI_RE =
   /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])/g;
 const CONTROL_RE = /[\x00-\x1f\x7f-\x9f]/g;
-export const visLen = (s: string) => s.replace(ANSI_RE, "").length;
+// Display width in terminal columns, not code units: Bun.stringWidth is
+// ANSI-aware and counts CJK/emoji as 2 and combining marks as 0, so columns
+// stay aligned for non-ASCII project/branch names that a naive .length skews.
+export const visLen = (s: string) => Bun.stringWidth(s);
 export const stripAnsi = (s: string) => s.replace(ANSI_RE, "");
 export const sanitizeDisplay = (s: string) =>
   s.replace(ANSI_RE, "").replace(CONTROL_RE, " ");
@@ -58,6 +61,20 @@ export function formatDuration(sec: number) {
   const h = Math.floor(m / 60);
   if (h < 24) return `${h}h`;
   return `${Math.floor(h / 24)}d`;
+}
+
+// Two-unit countdown for reset hints: days carry hours, hours carry minutes
+// (2d9h, 2h32m), dropping a zero remainder (2d, 2h); below an hour it's just
+// minutes, below a minute seconds. Unlike formatDuration's single largest unit.
+export function formatCountdown(sec: number) {
+  sec = Math.max(0, Math.floor(sec));
+  const d = Math.floor(sec / 86400);
+  const h = Math.floor((sec % 86400) / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  if (d > 0) return h > 0 ? `${d}d${h}h` : `${d}d`;
+  if (h > 0) return m > 0 ? `${h}h${m}m` : `${h}h`;
+  if (m > 0) return `${m}m`;
+  return `${sec}s`;
 }
 
 // Keep the project recognizable but short: just its last path segment

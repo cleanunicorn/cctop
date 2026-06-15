@@ -6,7 +6,13 @@
 // sort), windows the table to the terminal, draws the detail/help/confirm
 // overlays, and runs process actions (quit a session).
 
-import { collectRows, matchRow, type Row } from "./collect.ts";
+import {
+  collectRows,
+  matchRow,
+  type Row,
+  readUsage,
+  type Usage,
+} from "./collect.ts";
 import {
   BLUE_BG,
   BOLD,
@@ -22,7 +28,13 @@ import {
   visLen,
   YELLOW,
 } from "./format.ts";
-import { buildFrame, type Group, renderDetail, rowKey } from "./render.ts";
+import {
+  buildFrame,
+  type Group,
+  renderDetail,
+  rowKey,
+  usageLine,
+} from "./render.ts";
 
 type Mode = "list" | "detail" | "filter" | "confirm" | "help";
 
@@ -33,6 +45,7 @@ interface ConfirmAction {
 
 interface State {
   rows: Row[]; // all sessions, unfiltered, sorted by collectRows default
+  usage: Usage | null; // account-wide rate limits, or null when not captured
   mode: Mode;
   selectedKey: string | null;
   selectedIndex: number; // last known index, for clamping when a row vanishes
@@ -87,6 +100,7 @@ export async function runApp(opts: AppOptions): Promise<void> {
   const out = process.stdout;
   const state: State = {
     rows: [],
+    usage: readUsage(),
     mode: "list",
     selectedKey: null,
     selectedIndex: 0,
@@ -186,6 +200,7 @@ export async function runApp(opts: AppOptions): Promise<void> {
     refreshing = true;
     try {
       state.rows = await collectRows(null); // collect all; filter in-app
+      state.usage = readUsage(); // cheap single-file read; refresh alongside
     } finally {
       refreshing = false;
     }
@@ -435,6 +450,38 @@ export async function runApp(opts: AppOptions): Promise<void> {
   process.stdin.setRawMode?.(true);
   process.stdin.resume();
   process.stdin.setEncoding("utf8");
+
+  // Synchronized Output (DEC private mode 2026): when supported, wrapping a
+  // frame in BSU/ESU makes the terminal render it atomically, so no partial
+  // frame ever tears on screen. Probe once rather than emitting it blindly:
+  // unsupported terminals mostly ignore the unknown mode, but Apple Terminal
+  // echoes the query as text, so skip it there and assume unsupported.
+  const probeSyncOutput = (): Promise<boolean> => {
+    if (!process.stdin.isTTY || process.env.TERM_PROGRAM === "Apple_Terminal")
+      return Promise.resolve(false);
+    return new Promise<boolean>((resolve) => {
+      let timer: ReturnType<typeof setTimeout>;
+      let buf = "";
+      // Reply is CSI ? 2026 ; Ps $ y — Ps 1 (set) or 2 (reset) both mean the
+      // terminal knows the mode. Accumulate, since it may arrive split.
+      const onData = (d: string) => {
+        buf += d;
+        const m = buf.match(/\x1b\[\?2026;(\d+)\$y/);
+        if (!m) return;
+        clearTimeout(timer);
+        process.stdin.off("data", onData);
+        resolve(m[1] === "1" || m[1] === "2");
+      };
+      timer = setTimeout(() => {
+        process.stdin.off("data", onData);
+        resolve(false);
+      }, 150);
+      process.stdin.on("data", onData);
+      out.write("\x1b[?2026$p");
+    });
+  };
+  const syncOutput = await probeSyncOutput();
+
   process.stdin.on("data", (data: string) => {
     for (const k of parseKeys(data)) {
       if (k === "ctrl-c") return quit();
@@ -458,7 +505,16 @@ export async function runApp(opts: AppOptions): Promise<void> {
     }
   });
 
-  out.on("resize", () => draw());
+  // A drag-resize fires many SIGWINCH events; coalesce them so we repaint once
+  // the size settles instead of thrashing through intermediate geometries.
+  let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+  out.on("resize", () => {
+    if (resizeTimer) clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      resizeTimer = null;
+      draw();
+    }, 150);
+  });
 
   // --- rendering -----------------------------------------------------------
   function draw() {
@@ -471,7 +527,8 @@ export async function runApp(opts: AppOptions): Promise<void> {
           ? detailScreen(cols, rows)
           : listScreen(cols, rows);
     const frame = lines.map((l) => `${l}\x1b[K`).join("\n");
-    out.write(`\x1b[?2026h\x1b[H${frame}\x1b[J\x1b[?2026l`);
+    const body = `\x1b[H${frame}\x1b[J`;
+    out.write(syncOutput ? `\x1b[?2026h${body}\x1b[?2026l` : body);
   }
 
   // Fit a clip to height: returns the visible slice plus scroll indicators,
@@ -523,7 +580,7 @@ export async function runApp(opts: AppOptions): Promise<void> {
       ];
     }
 
-    const frame = buildFrame(rows, cols - GUTTER.length);
+    const frame = buildFrame(rows, cols - GUTTER.length, state.usage);
     const selIdx = rows.findIndex((r) => rowKey(r) === state.selectedKey);
     const body = windowGroups(frame.groups, selIdx, region);
     return [...top, GUTTER + frame.header, ...body, footer];
@@ -625,12 +682,18 @@ export async function runApp(opts: AppOptions): Promise<void> {
 
   function summaryLines(rows: Row[]): string[] {
     // Reuse buildFrame's summary for the (filtered) rows; if empty, a stub.
-    if (!rows.length)
-      return [
+    // Limits are account-wide, so they show even when no rows match the filter.
+    if (!rows.length) {
+      const base = [
         `${DIM}Sessions:${RESET} 0`,
         `${DIM}Resources:${RESET} cpu 0.0%  mem 0M  procs 0`,
       ];
-    return buildFrame(rows, (out.columns || 200) - GUTTER.length).summary;
+      const limits = usageLine(state.usage);
+      if (limits) base.push(limits);
+      return base;
+    }
+    return buildFrame(rows, (out.columns || 200) - GUTTER.length, state.usage)
+      .summary;
   }
 
   function headerOnly(cols: number): string {

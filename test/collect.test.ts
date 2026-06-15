@@ -827,3 +827,73 @@ describe("claude process identification", () => {
     expect(__test.versionFromPath(null)).toBeNull();
   });
 });
+
+describe("usage snapshot parsing", () => {
+  const snap = (rate_limits: unknown, captured_at?: unknown) => ({
+    rate_limits,
+    ...(captured_at !== undefined ? { captured_at } : {}),
+  });
+
+  test("parses both windows from the tap's shape", () => {
+    expect(
+      __test.parseUsage(
+        snap(
+          {
+            seven_day: { used_percentage: 8, resets_at: 1781568000 },
+            five_hour: { used_percentage: 60, resets_at: 1781544600 },
+          },
+          1781527457,
+        ),
+      ),
+    ).toEqual({
+      sevenDayPct: 8,
+      sevenDayResetsAt: 1781568000,
+      fiveHourPct: 60,
+      fiveHourResetsAt: 1781544600,
+      capturedAt: 1781527457,
+    });
+  });
+
+  test("a single window is enough; the missing one is null", () => {
+    expect(
+      __test.parseUsage(snap({ seven_day: { used_percentage: 8 } })),
+    ).toEqual({
+      sevenDayPct: 8,
+      sevenDayResetsAt: null,
+      fiveHourPct: null,
+      fiveHourResetsAt: null,
+      capturedAt: null,
+    });
+  });
+
+  test("treats missing / empty / non-object rate_limits as no data", () => {
+    expect(__test.parseUsage({})).toBeNull();
+    expect(__test.parseUsage(snap({}))).toBeNull();
+    expect(__test.parseUsage(snap(null))).toBeNull();
+    expect(__test.parseUsage(snap("nope"))).toBeNull();
+    expect(__test.parseUsage(null)).toBeNull();
+  });
+
+  test("a window with no usable percentage counts as no data", () => {
+    expect(
+      __test.parseUsage(snap({ seven_day: { resets_at: 1781568000 } })),
+    ).toBeNull();
+  });
+
+  test("non-numeric fields are dropped to null", () => {
+    expect(
+      __test.parseUsage(
+        snap(
+          { seven_day: { used_percentage: 8, resets_at: "soon" } },
+          "yesterday",
+        ),
+      ),
+    ).toEqual({
+      sevenDayPct: 8,
+      sevenDayResetsAt: null,
+      fiveHourPct: null,
+      fiveHourResetsAt: null,
+      capturedAt: null,
+    });
+  });
+});

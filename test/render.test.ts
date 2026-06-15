@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, expect, test } from "bun:test";
-import type { Row } from "../src/collect.ts";
-import { stripAnsi } from "../src/format.ts";
-import { buildFrame, renderDetail, rowKey } from "../src/render.ts";
+import type { Row, Usage } from "../src/collect.ts";
+import { RED, stripAnsi, YELLOW } from "../src/format.ts";
+import { buildFrame, renderDetail, rowKey, usageLine } from "../src/render.ts";
 
 const baseRow = (overrides: Partial<Row> = {}): Row => ({
   pid: 12345,
@@ -100,8 +100,8 @@ describe("render helpers", () => {
     const text = stripAnsi(lines.join("\n"));
     // 1 session + 8 agents + 1 overflow + 8 procs + 1 overflow
     expect(lines.length).toBe(19);
-    expect(text).toContain("+4 more sub-agents");
-    expect(text).toContain("+3 more processes");
+    expect(text).toContain("+4 sub-agents");
+    expect(text).toContain("+3 processes");
     // the overflow line is the closer (└), so every shown child branches with
     // ├ — no child stat row (└ followed by its pid) gets the closing glyph
     expect(text).not.toMatch(/└\s+\d/);
@@ -172,5 +172,85 @@ describe("render helpers", () => {
     expect(raw).not.toContain("\x1b[2J");
     expect(stripAnsi(raw)).toContain("prompt text");
     expect(stripAnsi(raw)).toContain("/tmp/log.jsonl");
+  });
+});
+
+describe("usage limits line", () => {
+  const NOW = 1_700_000_000_000; // fixed clock so countdowns are deterministic
+  const sec = NOW / 1000;
+  const usage = (o: Partial<Usage> = {}): Usage => ({
+    sevenDayPct: null,
+    sevenDayResetsAt: null,
+    fiveHourPct: null,
+    fiveHourResetsAt: null,
+    capturedAt: sec,
+    ...o,
+  });
+
+  test("formats both windows with two-unit reset countdowns", () => {
+    const line = usageLine(
+      usage({
+        sevenDayPct: 8,
+        sevenDayResetsAt: sec + 2 * 86400 + 9 * 3600,
+        fiveHourPct: 60,
+        fiveHourResetsAt: sec + 2 * 3600 + 32 * 60,
+      }),
+      NOW,
+    );
+    expect(stripAnsi(line ?? "")).toBe(
+      "Limits: 8% 7d (2d9h left)  60% 5h (2h32m left)",
+    );
+  });
+
+  test("rounds percentages and shows a single window alone", () => {
+    expect(stripAnsi(usageLine(usage({ sevenDayPct: 8.7 }), NOW) ?? "")).toBe(
+      "Limits: 9% 7d",
+    );
+  });
+
+  test("heats high percentages toward red, leaves low ones plain", () => {
+    const hot = usageLine(usage({ sevenDayPct: 92, fiveHourPct: 60 }), NOW)!;
+    expect(hot).toContain(`${RED}92%`); // 92% -> red
+    expect(hot).toContain(`${YELLOW}60%`); // 60% -> yellow
+    const cool = usageLine(usage({ sevenDayPct: 8 }), NOW)!;
+    expect(cool).not.toContain(RED);
+    expect(cool).not.toContain(YELLOW);
+  });
+
+  test("appends the snapshot age when stale, keeping heat colors", () => {
+    const line = usageLine(
+      usage({
+        sevenDayPct: 92,
+        sevenDayResetsAt: sec + 2 * 86400,
+        capturedAt: sec - 2 * 3600, // 2h old, past the 1h staleness window
+      }),
+      NOW,
+    );
+    expect(stripAnsi(line ?? "")).toBe("Limits: 92% 7d (2d left)  · 2h ago");
+    expect(line).toContain(RED); // colors kept — the line is not dimmed
+  });
+
+  test("does not flag a recent snapshot as stale", () => {
+    const line = usageLine(
+      usage({ sevenDayPct: 8, capturedAt: sec - 30 * 60 }), // 30m, within 1h
+      NOW,
+    );
+    expect(stripAnsi(line ?? "")).toBe("Limits: 8% 7d");
+  });
+
+  test("shows (due) for a window whose reset moment has already passed", () => {
+    expect(
+      stripAnsi(
+        usageLine(
+          usage({ fiveHourPct: 60, fiveHourResetsAt: sec - 10 }),
+          NOW,
+        ) ?? "",
+      ),
+    ).toBe("Limits: 60% 5h (due)");
+  });
+
+  test("returns null when there is no usable data", () => {
+    expect(usageLine(null, NOW)).toBeNull();
+    expect(usageLine(usage(), NOW)).toBeNull();
   });
 });

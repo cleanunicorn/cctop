@@ -25,7 +25,7 @@
 
 import pkg from "./package.json";
 import { runApp } from "./src/app.ts";
-import { collectRows } from "./src/collect.ts";
+import { collectRows, readUsage } from "./src/collect.ts";
 import { sanitizeDisplay } from "./src/format.ts";
 import { buildFrame } from "./src/render.ts";
 
@@ -119,7 +119,7 @@ if (asJson) {
         : "no Claude Code sessions running",
     );
   } else {
-    const frame = buildFrame(rows, process.stdout.columns ?? 200);
+    const frame = buildFrame(rows, process.stdout.columns ?? 200, readUsage());
     console.log(
       [
         ...frame.summary,

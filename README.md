@@ -20,6 +20,8 @@ waiting for input.
   single frame, so `cctop --json | jq` works.
 - **Status at a glance** — busy sessions are green, idle red; CPU and context
   heat toward red as they climb; the selected session is marked with a blue bar.
+- **Weekly usage limits** *(opt-in)* — show your Claude subscription's 5h/7d
+  rate-limit usage in the summary line.
 - **Quit a runaway session** in place (`x` → `SIGTERM`, with confirm).
 - **Read-only and local** — reads only `~/.claude` and the process table, spawns
   no processes, and only ever signals one when you explicitly quit it.
@@ -56,6 +58,46 @@ bun install -g github:stefanprodan/cctop --force
 ```sh
 bun uninstall -g cctop
 ```
+
+## Weekly usage limits
+
+cctop can show your Claude subscription's rate-limit usage in the summary line:
+
+```
+Limits: 8% 7d (2d9h left)  60% 5h (2h32m left)
+```
+
+This is opt-in and needs a one-time status-line script (the limits aren't stored
+on disk otherwise). See [docs/usage-limits.md](docs/usage-limits.md) for the
+two-step setup; the tap is below.
+
+<details>
+<summary>Status-line tap (add to your <code>statusLine</code> script, needs <code>jq</code>)</summary>
+
+```bash
+input=$(cat)
+
+# cctop usage tap: persist the account-wide 5h/7d rate limits in cctop/usage.json
+# docs: https://github.com/stefanprodan/cctop/blob/main/docs/usage-limits.md
+{
+  cctop_dir="$HOME/.claude/cctop"; cctop_f="$cctop_dir/usage.json"
+  cctop_now=$(date +%s)
+  cctop_mt=$(stat -f %m "$cctop_f" 2>/dev/null || stat -c %Y "$cctop_f" 2>/dev/null || echo 0)
+  if [ $(( cctop_now - cctop_mt )) -ge 30 ]; then
+    cctop_snap=$(echo "$input" \
+      | jq -c '.rate_limits | objects | select(length > 0)
+               | {rate_limits: ., captured_at: (now|floor)}' 2>/dev/null)
+    if [ -n "$cctop_snap" ]; then
+      mkdir -p "$cctop_dir"
+      cctop_tmp=$(mktemp "$cctop_dir/usage.json.XXXXXX") \
+        && printf '%s' "$cctop_snap" > "$cctop_tmp" \
+        && mv -f "$cctop_tmp" "$cctop_f"
+    fi
+  fi
+} || true
+```
+
+</details>
 
 ## Usage
 
