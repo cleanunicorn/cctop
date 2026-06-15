@@ -1,6 +1,6 @@
 # cctop
 
-Interactive `top`-style monitor for Claude Code sessions. Know at a glance what
+Interactive top-style monitor for Claude Code sessions. Know at a glance what
 Claude is working on, how much context it has left, and which sessions are
 waiting for input.
 
@@ -16,21 +16,20 @@ waiting for input.
 - **Process & sub-agent tree** — each session's sub-processes and live
   sub-agents are listed beneath it.
 - **Live TUI** — navigate with the keyboard, open a per-session detail view, and
-  filter and sort on the fly; piped or run with `--once`/`--json` it prints a
-  single frame, so `cctop --json | jq` works.
+  filter and sort on the fly; piped or run with `--once` it prints a single frame.
 - **Status at a glance** — busy sessions are green, idle red; CPU and context
   heat toward red as they climb; the selected session is marked with a blue bar.
 - **Weekly usage limits** *(opt-in)* — show your Claude subscription's 5h/7d
   rate-limit usage in the summary line.
 - **Quit a runaway session** in place (`x` → `SIGTERM`, with confirm).
-- **Read-only and local** — reads only `~/.claude` and the process table, spawns
-  no processes, and only ever signals one when you explicitly quit it.
-- **Zero dependencies** — a single Bun/TypeScript program with no npm packages;
-  it uses only Bun and OS built-ins.
+- **Read-only and local** — reads only `~/.claude` and the process table,
+  spawns no processes.
+- **Zero dependencies** — a single Bun program with no npm packages;
+  it uses only the Bun runtime and OS built-ins.
 
 ## Requirements
 
-- [Bun](https://bun.sh) 1.x
+- [Bun](https://bun.sh) 1.3 or newer
 - macOS or Linux
 
 ## Install

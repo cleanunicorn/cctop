@@ -6,7 +6,7 @@
 // functions over already-collected rows; the interactive runtime (app.ts)
 // layers selection, scrolling, and overlays on top.
 
-import type { Row, Usage } from "./collect.ts";
+import type { Instance, Usage } from "./collect.ts";
 import {
   BOLD,
   BRIGHT_GREEN,
@@ -33,7 +33,7 @@ import {
 
 // A stable identity for a session row that survives re-sorting across
 // refreshes, so the selection cursor stays put.
-export const rowKey = (r: Row) => r.sessionId ?? `pid:${r.pid}`;
+export const rowKey = (r: Instance) => r.sessionId ?? `pid:${r.pid}`;
 
 // `min` reserves a stable width for the volatile numeric columns so a
 // changing value (cpu spiking to "100.0%", mem growing) does not resize the
@@ -87,7 +87,7 @@ const shortModel = (m: string | null | undefined) =>
 
 // Paint a session cell: status dot, heat-colored cpu/ctx, dimmed units,
 // dimmed placeholders; everything else as-is.
-function styleCell(key: string, value: string, raw: Row) {
+function styleCell(key: string, value: string, raw: Instance) {
   if (value === "-") return `${DIM}-${RESET}`;
   switch (key) {
     case "state":
@@ -164,7 +164,7 @@ export interface Frame {
 // Build the full table frame from already-collected rows. `termCols` is the
 // width available to the table body (the caller subtracts any left gutter).
 export function buildFrame(
-  rows: Row[],
+  rows: Instance[],
   termCols: number,
   usage?: Usage | null,
 ): Frame {
@@ -263,7 +263,7 @@ export function buildFrame(
     )
     .join("  ");
 
-  const sessionLine = (cells: Cells, raw: Row) =>
+  const sessionLine = (cells: Cells, raw: Instance) =>
     cols
       .map(({ key, align }, i) => {
         let plain = cells[key];
@@ -383,7 +383,7 @@ const label = (s: string) => `${DIM}${pad(s, 9)}${RESET}`;
 
 // A full-screen panel for one session: everything the row truncates, shown
 // in full. Returns the body lines (caller adds title/footer chrome).
-export function renderDetail(r: Row, termCols: number): string[] {
+export function renderDetail(r: Instance, termCols: number): string[] {
   const width = Math.max(termCols, 20);
   const wrap = (text: string, indent = 0): string[] => {
     const room = Math.max(width - indent, 8);

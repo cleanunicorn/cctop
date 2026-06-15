@@ -37,7 +37,7 @@ works too):
 make deps       # bun install
 make run        # run the TUI (make run ARGS="flux" to pass a filter)
 make dev        # run with --watch live reload
-make lint       # biome check --write . && tsc --noEmit   (format + lint + types)
+make lint       # bun biome check --write . && bun tsc --noEmit  (format + lint + types)
 make build      # compile a standalone binary into bin/
 make clean      # remove bin/ and stray .bun-build files
 make update     # bun update (within semver ranges)
@@ -55,7 +55,7 @@ cctop.ts        entry: CLI arg parsing, non-interactive paths (--once/--json/-h/
 src/proc.ts     process table: macOS libproc FFI / Linux /proc.
                 exports listAllProcesses(), cwdOf()
 src/collect.ts  session discovery + transcript/sub-agent parsing.
-                exports collectRows(filter), matchRow(), Row/SubProc/SubAgent types
+                exports collectRows(filter), matchRow(), Instance/SubProc/SubAgent types
 src/render.ts   pure renderers over rows: buildFrame() (summary/header/groups),
                 renderDetail(), rowKey(); the column table definition lives here
 src/app.ts      interactive runtime: runApp(). AppState, raw-mode input loop,
@@ -64,7 +64,7 @@ src/format.ts   formatting + ANSI helpers (visLen/pad/colors/formatMem/...)
 ```
 
 Data flow: `proc.ts` + the session registry + transcripts → `collect.ts`
-assembles `Row[]` → `render.ts` turns rows into ANSI lines → `cctop.ts` prints
+assembles `Instance[]` → `render.ts` turns rows into ANSI lines → `cctop.ts` prints
 them once, or `app.ts` drives them as a live, navigable TUI.
 
 Data sources (all under `~/.claude`, read-only): the process table; the per-pid
@@ -86,13 +86,13 @@ in-process, so they never hit the process table — they are read from the
 
 ## Critical gotchas — read before editing
 
-1. **Transcript reads MUST stay synchronous (`node:fs`), not `Bun.file`.**
-   `collect.ts` reads transcripts with `openSync`/`readSync`/`fstatSync`. This
-   is deliberate: Bun's async file I/O (`Bun.file().text()` / `.arrayBuffer()`)
-   *stalls indefinitely* when the process holds the terminal in raw mode on the
-   alternate screen — which the TUI does. Do not "modernize" these back to
-   async; the first frame will hang forever. See the comment above
-   `transcriptDetails()`.
+1. **File *contents* go through `Bun.file` async (`.json()`,
+   `.slice().bytes()`); `node:fs` is only for `readdirSync`/`statSync`.** The
+   async reads are deliberate: `collectRows` overlaps every session's
+   transcript and registry/usage JSON reads with `Promise.all`, so the whole
+   scan runs concurrently. Keep it that way. `readdirSync`/`statSync` (directory
+   listing + mtime/birthtime metadata) stay synchronous — they have no
+   `Bun.file` equivalent.
 
 2. **Non-interactive parity is a contract.** `--once`, `--json`, and piped
    output (`isTTY` false) must keep producing a single plain frame and exit, so
@@ -119,11 +119,12 @@ in-process, so they never hit the process table — they are read from the
 
 ## Conventions
 
+- **Bun-only toolchain.** Bun is assumed to be the *only* runtime present — no Node.
 - **Style is enforced by Biome** (`biome.json`): 2-space indent, double quotes,
   semicolons, trailing commas, ~80 col. Three rules are intentionally off —
   `noExplicitAny` (FFI/JSON parsing), `noControlCharactersInRegex` (the ANSI
   `\x1b` regex), `noNonNullAssertion`.
-- **Types** are checked by `tsc --noEmit` (part of `make lint`). Keep it green.
+- **Types** are checked by `bun tsc --noEmit` (part of `make lint`). Keep it green.
 - **Comments explain *why*, not *what*** — match the existing density. The FFI
   struct offsets and the sync-I/O rationale are load-bearing comments; keep them.
 - **Version is single-sourced** in `package.json`; `cctop.ts` derives

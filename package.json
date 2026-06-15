@@ -10,7 +10,7 @@
     "start": "bun cctop.ts",
     "dev": "bun --watch cctop.ts",
     "test": "bun test",
-    "lint": "biome check --write . && tsc --noEmit",
+    "lint": "bun biome check --write . && bun tsc --noEmit",
     "build": "mkdir -p bin && bun build cctop.ts --compile --outfile bin/cctop && rm -f .*.bun-build",
     "clean": "rm -rf bin .*.bun-build",
     "install:bin": "bun run build && mkdir -p \"${PREFIX:-$HOME/.local}/bin\" && install -m 0755 bin/cctop \"${PREFIX:-$HOME/.local}/bin/cctop\"",
@@ -18,7 +18,7 @@
   },
   "license": "Apache-2.0",
   "engines": {
-    "bun": ">=1.0.0"
+    "bun": ">=1.3.0"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.0",
