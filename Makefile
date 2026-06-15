@@ -5,10 +5,11 @@
 # package.json — edit them there.
 
 PREFIX ?= $(HOME)/.local
+VERSION ?= patch
 
 .DEFAULT_GOAL := help
 
-.PHONY: help deps update run dev test build lint clean install uninstall
+.PHONY: help deps update run dev test build lint clean install uninstall pre-release
 
 help: ## Show available tasks
 	@grep -hE '^[a-z][a-z-]*:.*## .*$$' $(MAKEFILE_LIST) \
@@ -43,3 +44,18 @@ install: ## Compile and install onto PATH (override PREFIX=...)
 
 uninstall: ## Remove the installed binary (override PREFIX=...)
 	@PREFIX="$(PREFIX)" bun run uninstall:bin
+
+pre-release: ## Bump the version (VERSION=patch|minor|major|x.y.z) and open a release PR
+	@command -v gh >/dev/null 2>&1 || { echo "error: gh CLI is required"; exit 1; }
+	@test -z "$$(git status --porcelain)" || { echo "error: working tree is dirty; commit or stash first"; exit 1; }
+	@git fetch --quiet origin main
+	@git switch --quiet main && git merge --quiet --ff-only origin/main
+	@bun pm version "$(VERSION)" --no-git-tag-version >/dev/null
+	@new="$$(bun pm pkg get version | tr -d '\"')"; \
+		branch="release-v$$new"; \
+		git switch --quiet -c "$$branch"; \
+		git commit --quiet -m "release: v$$new" package.json; \
+		git push --quiet -u origin "$$branch"; \
+		gh pr create --base main --head "$$branch" \
+			--title "release: v$$new" \
+			--body "Prepare for release \`v$$new\`"
