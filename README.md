@@ -43,6 +43,16 @@ bun install -g github:stefanprodan/cctop
 
 This puts a `cctop` command in `~/.bun/bin` (add it to your `PATH` with `export PATH="$HOME/.bun/bin:$PATH"`).
 
+Prefer not to install Bun? Each [release](https://github.com/stefanprodan/cctop/releases)
+ships standalone binaries for macOS and Linux (`amd64`/`arm64`) with Bun bundled
+in — no runtime needed. Download cctop and install with:
+
+```sh
+# macOS arm64 — swap darwin_arm64 for darwin_amd64 / linux_amd64 / linux_arm64
+curl -fsSL https://github.com/stefanprodan/cctop/releases/latest/download/cctop_darwin_arm64.tar.gz | tar xz
+install -m 0755 cctop /usr/local/bin/cctop
+```
+
 You can now run it with `cctop` in your terminal.
 
 ### Update
