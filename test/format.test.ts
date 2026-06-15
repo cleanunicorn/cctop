@@ -9,6 +9,7 @@ import {
   CYAN,
   clockTime,
   DIM,
+  formatCountdown,
   formatDuration,
   formatMem,
   formatTokens,
@@ -38,6 +39,16 @@ describe("format helpers", () => {
     expect(formatDuration(12 * 60)).toBe("12m");
     expect(formatDuration(4 * 60 * 60)).toBe("4h");
     expect(formatDuration(9 * 24 * 60 * 60)).toBe("9d");
+  });
+
+  test("formats countdowns with a two-unit tail", () => {
+    expect(formatCountdown(-10)).toBe("0s");
+    expect(formatCountdown(45)).toBe("45s");
+    expect(formatCountdown(40 * 60)).toBe("40m");
+    expect(formatCountdown(2 * 3600 + 32 * 60)).toBe("2h32m");
+    expect(formatCountdown(2 * 3600)).toBe("2h"); // drop a zero remainder
+    expect(formatCountdown(2 * 86400 + 9 * 3600)).toBe("2d9h");
+    expect(formatCountdown(2 * 86400)).toBe("2d"); // drop a zero remainder
   });
 
   test("formats token counts", () => {

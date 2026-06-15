@@ -6,7 +6,7 @@
 // functions over already-collected rows; the interactive runtime (app.ts)
 // layers selection, scrolling, and overlays on top.
 
-import type { Row } from "./collect.ts";
+import type { Row, Usage } from "./collect.ts";
 import {
   BOLD,
   BRIGHT_GREEN,
@@ -14,6 +14,7 @@ import {
   cpuColor,
   ctxColor,
   DIM,
+  formatCountdown,
   formatDuration,
   formatMem,
   formatTokens,
@@ -109,6 +110,50 @@ export interface Group {
   lines: string[];
 }
 
+// "Limits: 8% 7d (2d left)  60% 5h (40m left)" — the account-wide rate-limit
+// summary line, from the status-line tap's snapshot (collect.ts readUsage()).
+// Percentages heat toward red as they climb (like CPU); the "(… left)" comes
+// from the absolute reset time, so it stays accurate even when the snapshot is
+// stale. Returns null when there is no usable data, so the summary just omits
+// the line. Once the snapshot is over an hour old, its age is appended so a
+// stale reading isn't mistaken for a live one (the percentages stop updating
+// when no session is active to refresh them).
+const USAGE_STALE_MS = 60 * 60_000;
+export function usageLine(
+  usage: Usage | null,
+  nowMs = Date.now(),
+): string | null {
+  if (!usage) return null;
+  const segs: string[] = [];
+  const win = (pct: number | null, label: string, resetsAt: number | null) => {
+    if (pct == null) return;
+    const p = Math.round(pct);
+    const c = cpuColor(p);
+    const head = `${c ? heatNum(`${p}%`, c) : `${p}%`} ${label}`;
+    // "(due)" once the reset moment has passed: the window should have reset but
+    // the snapshot still carries the old percentage (it lags behind real time)
+    const hint =
+      resetsAt == null
+        ? ""
+        : resetsAt * 1000 > nowMs
+          ? `(${formatCountdown(resetsAt - nowMs / 1000)} left)`
+          : "(due)";
+    segs.push(hint ? `${head} ${DIM}${hint}${RESET}` : head);
+  };
+  win(usage.sevenDayPct, "7d", usage.sevenDayResetsAt);
+  win(usage.fiveHourPct, "5h", usage.fiveHourResetsAt);
+  if (!segs.length) return null;
+  let line = `${DIM}Limits:${RESET} ${segs.join("  ")}`;
+  if (
+    usage.capturedAt != null &&
+    nowMs - usage.capturedAt * 1000 > USAGE_STALE_MS
+  ) {
+    const age = formatDuration(nowMs / 1000 - usage.capturedAt);
+    line += `  ${DIM}· ${age} ago${RESET}`;
+  }
+  return line;
+}
+
 export interface Frame {
   message?: string;
   summary: string[];
@@ -118,7 +163,11 @@ export interface Frame {
 
 // Build the full table frame from already-collected rows. `termCols` is the
 // width available to the table body (the caller subtracts any left gutter).
-export function buildFrame(rows: Row[], termCols: number): Frame {
+export function buildFrame(
+  rows: Row[],
+  termCols: number,
+  usage?: Usage | null,
+): Frame {
   const nowMs = Date.now();
   const view = rows.map((r) => ({
     raw: r,
@@ -182,6 +231,9 @@ export function buildFrame(rows: Row[], termCols: number): Frame {
       totalMem,
     )} mem  ${totalProcs} procs`,
   ];
+  // account-wide rate limits, when the status-line tap has captured them
+  const limits = usageLine(usage ?? null, nowMs);
+  if (limits) summary.push(limits);
 
   // widths use the plain cell text (color is added afterward); the state
   // column is the tree gutter, 2 wide — a status dot, or a branch plus a
@@ -247,16 +299,18 @@ export function buildFrame(rows: Row[], termCols: number): Frame {
   const ctxI = cols.findIndex((c) => c.key === "ctx");
   const modelI = cols.findIndex((c) => c.key === "model");
   const upI = cols.findIndex((c) => c.key === "up");
+  // the arm a sub-agent row draws: spans the gutter and the empty pid/mem/cpu
+  // columns (with their separators), reaching the UP column where its stats begin
+  const agentArmW =
+    widths[stateI] +
+    ["pid", "mem", "cpu"].reduce((sum, key) => {
+      const i = cols.findIndex((col) => col.key === key);
+      return sum + 2 + widths[i];
+    }, 0);
+  const agentArm = (isLast: boolean) =>
+    `${isLast ? "└" : "├"}${"─".repeat(Math.max(0, agentArmW - 1))}`;
   const agentLine = (a: any, isLast: boolean) => {
-    // the arm spans the gutter and the empty pid/mem/cpu columns (with their
-    // separators), reaching the UP column where the cyan stats take over
-    const armW =
-      widths[stateI] +
-      ["pid", "mem", "cpu"].reduce((sum, key) => {
-        const i = cols.findIndex((col) => col.key === key);
-        return sum + 2 + widths[i];
-      }, 0);
-    const arm = `${isLast ? "└" : "├"}${"─".repeat(Math.max(0, armW - 1))}`;
+    const arm = agentArm(isLast);
     const up = pad(
       a.uptimeSec != null ? formatDuration(a.uptimeSec) : "",
       widths[upI],
@@ -276,10 +330,11 @@ export function buildFrame(rows: Row[], termCols: number): Frame {
     return `${DIM}${arm}${RESET}  ${CYAN}${up}  ${ctx}  ${model}${tail}${RESET}`;
   };
 
-  // a dim summary line that stands in for capped sub-agent/sub-process rows; a
-  // branch glyph keeps it on the spine like the rows it replaces
-  const moreLine = (branch: string, hidden: number, noun: string) =>
-    `${DIM}${pad(branch, widths[stateI])}  … +${hidden} more ${noun}${RESET}`;
+  // a dim summary line that stands in for capped sub-agent/sub-process rows; it
+  // reuses the same arm/branch as the rows it replaces so it sits flush on the
+  // spine instead of dangling off a stub pipe
+  const moreLine = (arm: string, hidden: number, noun: string) =>
+    `${DIM}${arm}  +${hidden} ${noun}${RESET}`;
 
   // each group is a session row, then its live sub-agents (◆), then its
   // sub-process tree (─), all hanging off one connected spine: every child
@@ -305,10 +360,16 @@ export function buildFrame(rows: Row[], termCols: number): Frame {
 
     for (const a of agents) lines.push(agentLine(a, last()));
     if (moreAgents > 0)
-      lines.push(moreLine(last() ? "└" : "├", moreAgents, "sub-agents"));
+      lines.push(moreLine(agentArm(last()), moreAgents, "sub-agents"));
     for (const c of kids) lines.push(childLine(c, last()));
     if (moreKids > 0)
-      lines.push(moreLine(last() ? "└" : "├", moreKids, "processes"));
+      lines.push(
+        moreLine(
+          pad(last() ? "└─" : "├─", widths[stateI]),
+          moreKids,
+          "processes",
+        ),
+      );
 
     return { key: rowKey(r.raw), lines };
   });
