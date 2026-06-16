@@ -37,7 +37,7 @@ waiting for input.
 Install `cctop` globally with:
 
 ```sh
-bun install -g github:stefanprodan/cctop#v0.0.1
+bun install -g github:stefanprodan/cctop#v0.1.0
 ```
 
 This puts a `cctop` command in `~/.bun/bin` (add it to your `PATH` with `export PATH="$HOME/.bun/bin:$PATH"`).
@@ -56,7 +56,7 @@ install -m 0755 cctop /usr/local/bin/cctop
 Upgrade by installing the latest [release](https://github.com/stefanprodan/cctop/releases) tag:
 
 ```sh
-bun install -g github:stefanprodan/cctop#v0.0.1
+bun install -g github:stefanprodan/cctop#v0.1.0
 ```
 
 ### Uninstall
