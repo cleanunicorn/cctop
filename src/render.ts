@@ -6,7 +6,7 @@
 // functions over already-collected rows; the interactive runtime (app.ts)
 // layers selection, scrolling, and overlays on top.
 
-import type { Instance, Usage } from "./collect.ts";
+import type { Instance, NetRate, Usage } from "./collect.ts";
 import {
   BOLD,
   BRIGHT_GREEN,
@@ -17,6 +17,7 @@ import {
   formatCountdown,
   formatDuration,
   formatMem,
+  formatRate,
   formatTokens,
   heatNum,
   pad,
@@ -163,10 +164,14 @@ export interface Frame {
 
 // Build the full table frame from already-collected rows. `termCols` is the
 // width available to the table body (the caller subtracts any left gutter).
+// `net` is the machine-wide throughput (host-wide, not Claude-only); when
+// present it appends a ↓/↑ rate to the Resources line. Single-frame callers
+// (--once/--json) pass nothing, so the line stays unchanged there.
 export function buildFrame(
   rows: Instance[],
   termCols: number,
   usage?: Usage | null,
+  net?: NetRate | null,
 ): Frame {
   const nowMs = Date.now();
   const view = rows.map((r) => ({
@@ -226,10 +231,19 @@ export function buildFrame(
   const summary = [
     `${DIM}Sessions:${RESET} ${states.join("  ") || view.length}` +
       (totalAgents ? `   ${CYAN}◆${RESET} ${totalAgents} subagents` : ""),
-    // value-first ("1.8% cpu") to match the Sessions line's "1 busy" style
+    // value-first ("1.8% cpu") to match the Sessions line's "1 busy" style;
+    // the ↓/↑ net rate is host-wide (every interface), unlike the Claude-only
+    // cpu/mem/procs to its left, so it carries its own arrows rather than a
+    // "net" label that would imply it's scoped to the sessions
     `${DIM}Resources:${RESET} ${totalCpu.toFixed(1)}% cpu  ${formatMem(
       totalMem,
-    )} mem  ${totalProcs} procs`,
+    )} mem  ${totalProcs} procs${
+      net
+        ? `  ${DIM}↓${RESET} ${formatRate(net.rx)} ${DIM}↑${RESET} ${formatRate(
+            net.tx,
+          )}`
+        : ""
+    }`,
   ];
   // account-wide rate limits, when the status-line tap has captured them
   const limits = usageLine(usage ?? null, nowMs);
