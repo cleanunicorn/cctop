@@ -25,7 +25,7 @@
 
 import pkg from "./package.json";
 import { runApp } from "./src/app.ts";
-import { collectRows, readUsage } from "./src/collect.ts";
+import { captureUsage, collectRows, readUsage } from "./src/collect.ts";
 import { sanitizeDisplay } from "./src/format.ts";
 import { buildFrame } from "./src/render.ts";
 
@@ -44,6 +44,8 @@ const HELP = `\x1b[1mcctop\x1b[0m - monitor running Claude Code sessions
   -w, --watch[=seconds]  set the refresh interval (default: 1s, min 0.25s)
   --once                 render once and exit (default when piped)
   --json                 print full session details as JSON
+  --capture-usage        save rate-limit usage from a status-line payload on
+                         stdin (see docs/usage-limits.md); prints nothing
   -v, --version          show version
   -h, --help             show this help
 
@@ -72,6 +74,7 @@ let watchSecs = 1; // refresh interval; live by default on a terminal
 const MIN_WATCH_SECS = 0.25;
 let once = false; // force a single frame and exit
 let asJson = false;
+let capture = false; // status-line tap: persist usage from stdin, then exit
 const args = Bun.argv.slice(2);
 for (let i = 0; i < args.length; i++) {
   const arg = args[i];
@@ -93,6 +96,8 @@ for (let i = 0; i < args.length; i++) {
       );
   } else if (arg === "--json") {
     asJson = true;
+  } else if (arg === "--capture-usage") {
+    capture = true;
   } else if (arg.startsWith("-")) {
     fail(`unknown option: ${arg}`);
   } else if (filter === null) {
@@ -100,6 +105,14 @@ for (let i = 0; i < args.length; i++) {
   } else {
     fail(`unexpected argument: ${arg} (filter is already "${filter}")`);
   }
+}
+
+// Status-line tap: read the JSON Claude Code pipes to a status-line command on
+// stdin, persist its rate limits for the summary, then exit. Prints nothing (a
+// status line's stdout becomes its rendered text) and never fails the caller.
+if (capture) {
+  if (!process.stdin.isTTY) await captureUsage(await Bun.stdin.text());
+  process.exit(0);
 }
 
 // Live only on an interactive terminal; piping, redirecting, --once, or

@@ -46,7 +46,7 @@ import { cwdOf, listAllProcesses } from "./proc.ts";
 
 export type { Instance, SubAgent, SubProc } from "./collect/types.ts";
 export type { Usage } from "./collect/usage.ts";
-export { readUsage } from "./collect/usage.ts";
+export { captureUsage, readUsage } from "./collect/usage.ts";
 
 // Does a row match the filter? Searches project, host, branch, model, and
 // session id/name. Shared by the snapshot path and the live TUI filter.
