@@ -44,6 +44,8 @@ import type { Instance, InstanceBase } from "./collect/types.ts";
 import { parseUsage } from "./collect/usage.ts";
 import { cwdOf, listAllProcesses } from "./proc.ts";
 
+export type { NetRate } from "./collect/network.ts";
+export { netThroughput } from "./collect/network.ts";
 export type { Instance, SubAgent, SubProc } from "./collect/types.ts";
 export type { Usage } from "./collect/usage.ts";
 export { captureUsage, readUsage } from "./collect/usage.ts";

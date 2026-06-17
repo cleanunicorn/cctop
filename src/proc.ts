@@ -21,10 +21,50 @@ export interface Proc {
 export let listAllProcesses!: () => Proc[];
 export let cwdOf: (pid: number) => string | null = () => null;
 
+export interface IfCounters {
+  name: string;
+  rx: number; // cumulative bytes received on this interface
+  tx: number; // cumulative bytes transmitted on this interface
+}
+
+// Per-interface cumulative byte counters for every real (non-loopback)
+// interface, machine-wide — not per-process (no read-only per-pid network
+// counter exists on either platform). Returned per-interface (not pre-summed)
+// so the rate sampler can delta each interface and clamp wraps independently;
+// summing first would let one interface's 32-bit wrap mask another's traffic
+// (see collect/network.ts). Returns null when the counters can't be read, so
+// callers can distinguish a read failure from a genuine zero. Defaults to null
+// until a platform assigns.
+export let netCounters: () => IfCounters[] | null = () => null;
+
+// Parse the body of Linux /proc/net/dev into per-interface byte counters.
+// Format: a two-line header, then one line per interface:
+//   "  eth0: <rx bytes> <rx packets> ... <tx bytes> <tx packets> ...".
+// The name is left of the colon; right of it, field 0 is rx bytes and field 8
+// is tx bytes. One row per interface (no per-address-family duplicates), so the
+// name alone identifies it. Counters are 64-bit here, no wrap concern. Pure
+// (no I/O) so it can be unit-tested against a fixture; the platform wrapper
+// supplies the file contents.
+export function parseProcNetDev(text: string): IfCounters[] {
+  const out: IfCounters[] = [];
+  for (const line of text.split("\n")) {
+    const colon = line.indexOf(":");
+    if (colon < 0) continue; // header lines have no colon
+    const name = line.slice(0, colon).trim();
+    if (name === "lo") continue; // loopback
+    const f = line
+      .slice(colon + 1)
+      .trim()
+      .split(/\s+/);
+    out.push({ name, rx: Number(f[0]) || 0, tx: Number(f[8]) || 0 });
+  }
+  return out;
+}
+
 // --- Process listing: macOS (libproc FFI) ---------------------------------
 
 if (process.platform === "darwin") {
-  const { dlopen, ptr, FFIType } = await import("bun:ffi");
+  const { dlopen, ptr, read, CString, FFIType } = await import("bun:ffi");
 
   const PROC_PIDTBSDINFO = 3; // struct proc_bsdinfo, 136 bytes
   const PROC_PIDTASKINFO = 4; // struct proc_taskinfo, 96 bytes
@@ -65,6 +105,10 @@ if (process.platform === "darwin") {
       returns: FFIType.i32,
     },
     mach_timebase_info: { args: [FFIType.ptr], returns: FFIType.i32 },
+    // getifaddrs(struct ifaddrs **) allocates a linked list of interface
+    // records; freeifaddrs releases it. Read-only snapshot of kernel counters.
+    getifaddrs: { args: [FFIType.ptr], returns: FFIType.i32 },
+    freeifaddrs: { args: [FFIType.ptr], returns: FFIType.void },
   });
 
   // task CPU times are in mach time units, not nanoseconds
@@ -117,6 +161,58 @@ if (process.platform === "darwin") {
     return end > 152
       ? new TextDecoder().decode(vnodeInfo.slice(152, end))
       : null;
+  };
+
+  // struct ifaddrs (LP64): ifa_next@0, ifa_name@8, ifa_flags@16, ifa_addr@24,
+  // ifa_netmask@32, ifa_dstaddr@40, ifa_data@48 (pointers are 8 bytes). For an
+  // AF_LINK (18) record ifa_data points at a struct if_data whose byte counters
+  // sit at ifi_ibytes@40 / ifi_obytes@44 (8 u_char + 8 u32 precede them).
+  //
+  // Those counters are 32-bit and wrap at 4 GiB. macOS has no read-only 64-bit
+  // alternative: NET_RT_IFLIST2's `if_data64` leaves the high 32 bits of the
+  // byte counters zeroed (verified empirically — the 64-bit total `netstat`
+  // shows is reconstructed elsewhere), so it is no better. We therefore return
+  // the raw 32-bit counters per interface and let the rate sampler clamp each
+  // interface's wrap on its own (see collect/network.ts).
+  const AF_LINK = 18;
+  const IFF_LOOPBACK = 0x8; // ifa_flags bit; skip lo by flag, not by name
+  // Bun types pointers as an opaque brand, but at runtime they are plain
+  // numbers; retype read/free/CString to thread numbers through the list walk.
+  const rd = read as unknown as {
+    ptr: (p: number, o: number) => number;
+    u8: (p: number, o: number) => number;
+    u32: (p: number, o: number) => number;
+  };
+  const mkCStr = CString as unknown as new (p: number) => string;
+  const free = libc.symbols.freeifaddrs as unknown as (p: number) => void;
+  netCounters = () => {
+    const head = new BigUint64Array(1);
+    if (libc.symbols.getifaddrs(ptr(head)) !== 0) return null;
+    const list = Number(head[0]);
+    const out: IfCounters[] = [];
+    // freeifaddrs must run even if a read throws mid-walk, or the kernel
+    // allocation leaks on every refresh
+    try {
+      for (let cur = list; cur !== 0; cur = rd.ptr(cur, 0)) {
+        const addr = rd.ptr(cur, 24);
+        if (addr === 0 || rd.u8(addr, 1) !== AF_LINK) continue;
+        if (rd.u32(cur, 16) & IFF_LOOPBACK) continue; // loopback, by flag
+        const data = rd.ptr(cur, 48);
+        if (data === 0) continue;
+        out.push({
+          name: String(new mkCStr(rd.ptr(cur, 8))),
+          rx: rd.u32(data, 40),
+          tx: rd.u32(data, 44),
+        });
+      }
+    } catch {
+      // a recoverable read error (e.g. CString over an unexpected address) must
+      // signal failure, not crash — the refresh loop has no catch around this
+      return null;
+    } finally {
+      if (list !== 0) free(list); // runs even on the catch's early return
+    }
+    return out;
   };
 
   listAllProcesses = () => {
@@ -261,6 +357,16 @@ if (process.platform === "linux") {
       return readlinkSync(`/proc/${pid}/cwd`);
     } catch {
       return null;
+    }
+  };
+
+  // Snapshot the interface byte counters from /proc/net/dev (parseProcNetDev
+  // does the parsing); a read failure signals null rather than a bogus zero.
+  netCounters = () => {
+    try {
+      return parseProcNetDev(readFileSync("/proc/net/dev", "utf8"));
+    } catch {
+      return null; // /proc/net/dev unreadable (unusual); signal failure
     }
   };
 }

@@ -10,6 +10,8 @@ import {
   collectRows,
   type Instance,
   matchRow,
+  type NetRate,
+  netThroughput,
   readUsage,
   type Usage,
 } from "./collect.ts";
@@ -28,13 +30,7 @@ import {
   visLen,
   YELLOW,
 } from "./format.ts";
-import {
-  buildFrame,
-  type Group,
-  renderDetail,
-  rowKey,
-  usageLine,
-} from "./render.ts";
+import { buildFrame, type Group, renderDetail, rowKey } from "./render.ts";
 
 type Mode = "list" | "detail" | "filter" | "confirm" | "help";
 
@@ -46,6 +42,7 @@ interface ConfirmAction {
 interface State {
   rows: Instance[]; // all sessions, unfiltered, sorted by collectRows default
   usage: Usage | null; // account-wide rate limits, or null when not captured
+  net: NetRate | null; // machine-wide network throughput, sampled per refresh
   mode: Mode;
   selectedKey: string | null;
   selectedIndex: number; // last known index, for clamping when a row vanishes
@@ -101,6 +98,7 @@ export async function runApp(opts: AppOptions): Promise<void> {
   const state: State = {
     rows: [],
     usage: await readUsage(),
+    net: null, // first sample has no baseline; fills in on the next refresh
     mode: "list",
     selectedKey: null,
     selectedIndex: 0,
@@ -201,6 +199,7 @@ export async function runApp(opts: AppOptions): Promise<void> {
     try {
       state.rows = await collectRows(null); // collect all; filter in-app
       state.usage = await readUsage(); // cheap single-file read; refresh alongside
+      state.net = netThroughput(Date.now()); // delta vs the previous refresh
     } finally {
       refreshing = false;
     }
@@ -580,7 +579,12 @@ export async function runApp(opts: AppOptions): Promise<void> {
       ];
     }
 
-    const frame = buildFrame(rows, cols - GUTTER.length, state.usage);
+    const frame = buildFrame(
+      rows,
+      cols - GUTTER.length,
+      state.usage,
+      state.net,
+    );
     const selIdx = rows.findIndex((r) => rowKey(r) === state.selectedKey);
     const body = windowGroups(frame.groups, selIdx, region);
     return [...top, GUTTER + frame.header, ...body, footer];
@@ -684,16 +688,21 @@ export async function runApp(opts: AppOptions): Promise<void> {
     // Reuse buildFrame's summary for the (filtered) rows; if empty, a stub.
     // Limits are account-wide, so they show even when no rows match the filter.
     if (!rows.length) {
-      const base = [
-        `${DIM}Sessions:${RESET} 0`,
-        `${DIM}Resources:${RESET} cpu 0.0%  mem 0M  procs 0`,
-      ];
-      const limits = usageLine(state.usage);
-      if (limits) base.push(limits);
-      return base;
+      // Resources/limits are not row-scoped (net is machine-wide, limits are
+      // account-wide), so reuse buildFrame for them even with zero rows.
+      return buildFrame(
+        [],
+        (out.columns || 200) - GUTTER.length,
+        state.usage,
+        state.net,
+      ).summary;
     }
-    return buildFrame(rows, (out.columns || 200) - GUTTER.length, state.usage)
-      .summary;
+    return buildFrame(
+      rows,
+      (out.columns || 200) - GUTTER.length,
+      state.usage,
+      state.net,
+    ).summary;
   }
 
   function headerOnly(cols: number): string {

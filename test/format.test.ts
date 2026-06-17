@@ -12,6 +12,7 @@ import {
   formatCountdown,
   formatDuration,
   formatMem,
+  formatRate,
   formatTokens,
   pad,
   RED,
@@ -31,6 +32,22 @@ describe("format helpers", () => {
     expect(formatMem(0)).toBe("0M");
     expect(formatMem(512 * 1024 * 1024)).toBe("512M");
     expect(formatMem(1536 * 1024 * 1024)).toBe("1.5G");
+  });
+
+  test("formats network rate with a self-describing /s suffix", () => {
+    expect(formatRate(-100)).toBe("0/s"); // clamps negatives (counter wrap)
+    expect(formatRate(0)).toBe("0/s");
+    expect(formatRate(512)).toBe("512/s");
+    expect(formatRate(12 * 1024)).toBe("12K/s");
+    expect(formatRate(1.2 * 1024 * 1024)).toBe("1.2M/s");
+    expect(formatRate(150 * 1024 * 1024)).toBe("150M/s");
+    expect(formatRate(3.4 * 1024 * 1024 * 1024)).toBe("3.4G/s");
+  });
+
+  test("promotes a tier when rounding hits 1024 at the boundary", () => {
+    expect(formatRate(1023.6)).toBe("1K/s"); // not "1024/s"
+    expect(formatRate(1024 * 1023.6)).toBe("1.0M/s"); // not "1024K/s"
+    expect(formatRate(1024 * 1024 * 1023.6)).toBe("1.0G/s"); // not "1024M/s"
   });
 
   test("formats durations using the largest compact unit", () => {

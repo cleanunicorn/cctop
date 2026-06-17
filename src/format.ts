@@ -41,6 +41,23 @@ export function formatMem(bytes: number) {
   return mb >= 1024 ? `${(mb / 1024).toFixed(1)}G` : `${Math.round(mb)}M`;
 }
 
+// Compact, self-describing network rate (bytes/sec): "0/s", "12K/s", "1.2M/s",
+// "3.4G/s". The "/s" is carried in the token because the Resources line labels
+// it only with a ↓/↑ arrow, not a word. Finer at the low end than formatMem
+// (idle links sit near zero).
+export function formatRate(bytesPerSec: number) {
+  const b = Math.max(0, bytesPerSec);
+  // threshold on the rounded value so a tier that rounds up to 1024 promotes
+  // instead of printing "1024/s" / "1024K/s" (e.g. 1023.6 → "1K/s", not "1024/s")
+  if (Math.round(b) < 1024) return `${Math.round(b)}/s`;
+  const kb = b / 1024;
+  if (Math.round(kb) < 1024) return `${Math.round(kb)}K/s`;
+  const mb = kb / 1024;
+  if (mb < 100) return `${mb.toFixed(1)}M/s`;
+  if (Math.round(mb) < 1024) return `${Math.round(mb)}M/s`;
+  return `${(mb / 1024).toFixed(1)}G/s`;
+}
+
 // 24-hour HH:MM:SS, locale-independent
 export function clockTime() {
   const d = new Date();
