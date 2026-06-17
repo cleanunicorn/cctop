@@ -1,27 +1,24 @@
 # cctop - Makefile
 #
-# Thin wrapper over the package.json scripts, so `make <task>` and
-# `bun run <task>` are interchangeable. The actual commands live in
-# package.json — edit them there.
+# Thin wrapper over the package.json scripts: each task runs the script of the
+# same name, so `make <task>` and `bun run <task>` are interchangeable. The
+# actual commands live in package.json — edit them there. The one exception is
+# `prep-release`, Make-only release tooling. (`install-bin` is named to match its
+# script — a script plainly named `install` would fire on `bun install`.)
 
-PREFIX ?= $(HOME)/.local
+# Exported so `make install-bin PREFIX=/usr/local` reaches the install-bin script.
+export PREFIX
 VERSION ?= patch
 
 .DEFAULT_GOAL := help
 
-.PHONY: help deps update run dev test build lint clean install uninstall pre-release
+.PHONY: help start dev test build lint clean install-bin uninstall-bin prep-release
 
 help: ## Show available tasks
 	@grep -hE '^[a-z][a-z-]*:.*## .*$$' $(MAKEFILE_LIST) \
 		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
 
-deps: ## Install dependencies (bun install)
-	@bun install
-
-update: ## Update dependencies within their ranges (bun update)
-	@bun update
-
-run: ## Run the interactive TUI (make run ARGS="flux")
+start: ## Run the interactive TUI (make start ARGS="flux")
 	@bun run start $(ARGS)
 
 dev: ## Run with live reload (make dev ARGS="...")
@@ -39,13 +36,13 @@ build: ## Compile a standalone binary into bin/
 clean: ## Remove build artifacts
 	@bun run clean
 
-install: ## Compile and install onto PATH (override PREFIX=...)
-	@PREFIX="$(PREFIX)" bun run install:bin
+install-bin: ## Compile and install onto PATH (override PREFIX=...)
+	@bun run install-bin
 
-uninstall: ## Remove the installed binary (override PREFIX=...)
-	@PREFIX="$(PREFIX)" bun run uninstall:bin
+uninstall-bin: ## Remove the installed binary (override PREFIX=...)
+	@bun run uninstall-bin
 
-pre-release: ## Bump the version (VERSION=patch|minor|major|x.y.z) in package.json + README and open a release PR
+prep-release: ## Bump the version (VERSION=patch|minor|major|x.y.z) in package.json + README and open a release PR
 	@command -v gh >/dev/null 2>&1 || { echo "error: gh CLI is required"; exit 1; }
 	@test -z "$$(git status --porcelain)" || { echo "error: working tree is dirty; commit or stash first"; exit 1; }
 	@git fetch --quiet origin main

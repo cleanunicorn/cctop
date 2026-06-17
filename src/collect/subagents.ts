@@ -8,41 +8,9 @@
 // sessions falling back to the same transcript can't both claim the agents.
 
 import { type Dirent, readdirSync, statSync } from "node:fs";
-import { contextTokens } from "./entry.ts";
+import { contextTokens, describeAssistant } from "./entry.ts";
 import { MAX_TAIL_BYTES } from "./transcript.ts";
 import type { Instance, InstanceBase, SubAgent } from "./types.ts";
-
-// What an agent is doing right now, from its latest assistant turn: the most
-// recent tool call (tool + its key argument) or, failing that, a snippet of
-// the latest message text. Agents have no real name, so this is the label.
-const FILE_TOOLS = new Set(["Read", "Edit", "Write", "NotebookEdit"]);
-export function describeAssistant(msg: any): string | null {
-  const blocks = msg?.content;
-  if (!Array.isArray(blocks)) return null;
-  const tool = [...blocks].reverse().find((b) => b?.type === "tool_use");
-  if (tool) {
-    const inp = tool.input ?? {};
-    let arg = String(
-      inp.command ??
-        inp.pattern ??
-        inp.query ??
-        inp.url ??
-        inp.file_path ??
-        inp.path ??
-        inp.description ??
-        inp.subagent_type ??
-        "",
-    )
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 120);
-    if (FILE_TOOLS.has(tool.name) && arg.includes("/"))
-      arg = arg.split("/").pop()!;
-    return arg ? `${tool.name}: ${arg}` : tool.name;
-  }
-  const text = [...blocks].reverse().find((b) => b?.type === "text")?.text;
-  return text ? text.replace(/\s+/g, " ").trim() : null;
-}
 
 const hasBlock = (msg: any, type: string) =>
   Array.isArray(msg?.content) && msg.content.some((b: any) => b?.type === type);

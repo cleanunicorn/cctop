@@ -114,6 +114,28 @@ export function subprocsOf(
   );
 }
 
+// Every pid in the subtree rooted at `root` (inclusive), without crossing into
+// a nested session (candidatePids) — those get their own rows, so their
+// listeners must not roll up here. Used for port attribution: a displayed
+// sub-process should own the ports of the descendants it spawned, since
+// subprocsOf shows the wrapper (`npm run dev`) while a deeper child (node/vite)
+// holds the actual listening socket. The counter caps a pathological cycle.
+export function descendants(
+  root: number,
+  childrenOf: Map<number, Proc[]>,
+  candidatePids: Set<number>,
+): number[] {
+  const out: number[] = [];
+  const stack = [root];
+  for (let guard = 0; stack.length && guard < 10_000; guard++) {
+    const pid = stack.pop()!;
+    out.push(pid);
+    for (const c of childrenOf.get(pid) ?? [])
+      if (!candidatePids.has(c.pid)) stack.push(c.pid);
+  }
+  return out;
+}
+
 // %CPU: like top, the delta between two samples (watch refreshes); on the
 // first sample it falls back to the average since the process started.
 const cpuSamples = new Map<number, { cpuSec: number; atMs: number }>();

@@ -33,3 +33,36 @@ export const contextTokens = (u: TokenUsage | undefined): number =>
   (u?.input_tokens ?? 0) +
   (u?.cache_read_input_tokens ?? 0) +
   (u?.cache_creation_input_tokens ?? 0);
+
+// What a turn did, from an assistant message: the most recent tool call (tool +
+// its key argument) or, failing that, a snippet of the latest message text.
+// Used both as a sub-agent's live label and as a session's "last turn" line, so
+// it lives in this shared leaf alongside contextTokens.
+const FILE_TOOLS = new Set(["Read", "Edit", "Write", "NotebookEdit"]);
+export function describeAssistant(msg: any): string | null {
+  const blocks = msg?.content;
+  if (!Array.isArray(blocks)) return null;
+  const tool = [...blocks].reverse().find((b) => b?.type === "tool_use");
+  if (tool) {
+    const inp = tool.input ?? {};
+    let arg = String(
+      inp.command ??
+        inp.pattern ??
+        inp.query ??
+        inp.url ??
+        inp.file_path ??
+        inp.path ??
+        inp.description ??
+        inp.subagent_type ??
+        "",
+    )
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 120);
+    if (FILE_TOOLS.has(tool.name) && arg.includes("/"))
+      arg = arg.split("/").pop()!;
+    return arg ? `${tool.name}: ${arg}` : tool.name;
+  }
+  const text = [...blocks].reverse().find((b) => b?.type === "text")?.text;
+  return text ? text.replace(/\s+/g, " ").trim() : null;
+}

@@ -15,14 +15,14 @@ brew install bun biome typescript
 ```
 
 Bun is the only hard requirement — Biome and TypeScript are also listed as
-devDependencies, so `make deps` (`bun install`) pulls them in as well.
+devDependencies, so `bun install` pulls them in as well.
 
 ## Getting started
 
 ```sh
 git clone https://github.com/stefanprodan/cctop.git
 cd cctop
-make deps        # bun install
+bun install
 ```
 
 ## Development
@@ -38,13 +38,13 @@ make dev ARGS="flux"     # pass a filter
 Other useful targets:
 
 ```sh
-make run         # run once, without the file watcher
+make start       # run once, without the file watcher
+make test        # bun test (the unit suite under test/)
 make lint        # Biome format + lint, then tsc --noEmit
 make build       # compile a standalone binary into bin/
 ```
 
-Always run `make lint` before opening a pull request — it formats, lints, and
-type-checks, and must pass.
+Always run `make lint test` before a commit.
 
 ## Using Claude Code
 

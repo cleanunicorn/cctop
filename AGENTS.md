@@ -8,16 +8,19 @@ Guidance for AI agents and contributors working on **cctop**, an interactive
 A single Bun/TypeScript program that lists every running Claude Code session
 with process stats, busy/idle state, context size, model, host app, project,
 branch, last prompt, a tree of sub-processes, and live sub-agents. On a TTY it's
-an interactive TUI; piped or with `--once`/`--json` it prints one frame.
+an interactive TUI; piped or with `--once` it prints one plain-text frame and
+exits, while `--json` prints one JSON snapshot and exits.
 
 - **Runtime:** Bun (TypeScript run directly, no build step for dev).
 - **Platforms:** macOS and Linux only (process table is read via macOS
   `libproc` FFI or Linux `/proc`).
-- **Everything is read-only.** cctop spawns no processes. The *only* thing it
-  ever does to another process is send a signal — and only on an explicit user
-  action (`x` → SIGTERM). Preserve this property.
+- **Read-only, with one deliberate exception.** cctop spawns no processes and
+  never mutates any session, registry, or transcript. Its one write is its own
+  usage cache (`~/.claude/cctop/usage.json`), and only under `--capture-usage`;
+  the only thing it ever does to another process is send a signal, and only on an
+  explicit user action (`x` → SIGTERM). Preserve this property.
 - **Zero runtime dependencies.** cctop imports only Bun and OS built-ins
-  (`bun:ffi`, `node:fs`, …); `package.json` has an empty `dependencies` (the
+  (`bun:ffi`, `node:fs`, …); `package.json` has no `dependencies` field (the
   devDependencies are just Biome/tsc/types). Do not add npm packages — keep it
   dependency-free.
 
@@ -30,75 +33,88 @@ It exposes `search_bun` (semantic search) and
 
 ## Commands
 
-Use the Makefile (thin wrappers over `package.json` scripts; `bun run <x>`
-works too):
+Use the Makefile — each target runs the `package.json` script of the same name,
+so `make <x>` and `bun run <x>` are interchangeable. (The one exception is
+`make prep-release`, Make-only release tooling. `install-bin` is named to match
+its script: a script plainly named `install` would fire on `bun install`.)
 
 ```sh
-make deps       # bun install
-make run        # run the TUI (make run ARGS="flux" to pass a filter)
+make start      # run the TUI (make start ARGS="flux" to pass a filter)
 make dev        # run with --watch live reload
 make lint       # bun biome check --write . && bun tsc --noEmit  (format + lint + types)
+make test       # bun test (the unit suite under test/)
 make build      # compile a standalone binary into bin/
 make clean      # remove bin/ and stray .bun-build files
-make update     # bun update (within semver ranges)
-make install    # compile + install onto PATH (override PREFIX=...)
+make install-bin # compile + install onto PATH (override PREFIX=...)
 ```
 
-**Always run `make lint` before finishing a change.** It formats, lints, and
-type-checks; it exits non-zero (and prints why) on any unfixable issue.
+**Always run `make lint` before finishing a change** (it formats, lints, and
+type-checks; it exits non-zero on any unfixable issue) — and **`make test`** when
+you touch the collectors or renderers. `make lint` does *not* run the tests.
 
 ## Layout
 
 ```
 cctop.ts        entry: CLI arg parsing, non-interactive paths (--once/--json/-h/-v),
                 dispatch to runApp(); VERSION derived from package.json
-src/proc.ts     process table: macOS libproc FFI / Linux /proc.
-                exports listAllProcesses(), cwdOf()
-src/collect.ts  session discovery + transcript/sub-agent parsing.
-                exports collectRows(filter), matchRow(), Instance/SubProc/SubAgent types
+src/app.ts      interactive runtime: runApp(). State, raw-mode input loop,
+                draw(), windowGroups(), the quit action
 src/render.ts   pure renderers over rows: buildFrame() (summary/header/groups),
                 renderDetail(), rowKey(); the column table definition lives here
-src/app.ts      interactive runtime: runApp(). AppState, raw-mode input loop,
-                draw(), windowGroups(), the quit action
 src/format.ts   formatting + ANSI helpers (visLen/pad/colors/formatMem/...)
+src/proc.ts     process-table facade: picks the platform impl at startup and
+                re-exports listAllProcesses(), cwdOf(), netCounters(), parseProcNetDev()
+src/proc/       per-platform sources behind that facade: darwin.ts (libproc FFI),
+                linux.ts (/proc), netdev.ts (pure /proc/net/dev parser),
+                types.ts (Proc/IfCounters/ProcSource)
+src/collect.ts  orchestrator: correlates the process table + session registry +
+                transcripts into Instance[]; exports collectRows(filter), matchRow()
+src/collect/    one collector per data source: sessions, usage, transcript,
+                subagents, process-tree (HOST + sub-process tree), network,
+                orphans (leftover dev-server ports); plus entry/types/paths
+                leaf helpers shared between them
 ```
 
 Data flow: `proc.ts` + the session registry + transcripts → `collect.ts`
 assembles `Instance[]` → `render.ts` turns rows into ANSI lines → `cctop.ts` prints
 them once, or `app.ts` drives them as a live, navigable TUI.
 
-Data sources (all under `~/.claude`, read-only): the process table; the per-pid
-session registry `sessions/<pid>.json`; and each session's transcript
-`projects/<dir>/<id>.jsonl` (tail only, cached by mtime) plus sub-agent
-transcripts under `<id>/subagents/`.
+Data sources, all read-only: the OS process table (libproc/`/proc`), and — under
+`~/.claude` — the per-pid session registry `sessions/<pid>.json`, each session's
+transcript `projects/<dir>/<id>.jsonl` (tail only, cached by mtime), and the
+sub-agent transcripts under `<id>/subagents/`. The one file cctop *writes* is its
+own usage cache `~/.claude/cctop/usage.json` (only under `--capture-usage`).
 
-The `HOST` column is resolved by walking each session's process ancestry past
-shells and wrappers to the first app bundle or recognizable program (iTerm,
-Ghostty, VS Code, a JetBrains IDE, tmux, sshd…); see `HOST_SKIP` in `collect.ts`.
-Sub-process rows skip a tool's wrapping shell so the real command shows
-(`bash › go test`). A Claude session spawned by another Claude (a background job
-or sub-session) is the exception: it gets its own top-level row rather than
-appearing as a sub-process of its parent, and its `HOST` reads `claude` (the
-parent) instead of the nested process's versioned exec name (`2.1.177`) — both
-keyed off the same `isClaudeProc` check. Live sub-agents (`Task`/`Workflow`) run
-in-process, so they never hit the process table — they are read from the
-`subagents/` transcripts.
+Two cross-cutting rules worth knowing before you read the code. A Claude session
+spawned by another Claude (a background job or sub-session) gets its own
+top-level row rather than nesting as a sub-process, and its `HOST` reads `claude`
+(the parent). Live sub-agents (`Task`/`Workflow`) run in-process, so they never
+hit the process table at all — they come from the `subagents/` transcripts
+(`collect/subagents.ts`). The rest — how the `HOST` column walks process ancestry
+past wrapping shells, and how the sub-process tree is built — is documented at
+the source in `collect/process-tree.ts` (`hostApp`, `HOST_SKIP`, `isClaudeProc`).
 
 ## Critical gotchas — read before editing
 
-1. **File *contents* go through `Bun.file` async (`.json()`,
-   `.slice().bytes()`, `Bun.write()`); `node:fs` is only for directory and
-   metadata ops (`readdirSync`/`statSync`/`mkdirSync`/`renameSync`).** The async
-   reads are deliberate: `collectRows` overlaps every session's transcript and
-   registry/usage JSON reads with `Promise.all`, so the whole scan runs
-   concurrently. Keep it that way. The `node:fs` calls (directory listing,
-   mtime/birthtime, and the `--capture-usage` mkdir + atomic temp-file rename)
-   stay synchronous — they have no `Bun.file` equivalent.
+1. **For the `~/.claude` data (registry, transcripts, usage), file *contents* go
+   through `Bun.file` async (`.json()`, `.slice().bytes()`, `Bun.write()`);
+   `node:fs` is for directory and metadata ops only (`readdirSync`/`statSync`/
+   `mkdirSync`/`renameSync`).** The async reads are deliberate: `readSessions`
+   reads the registry with `Promise.all`, and `collectRows` overlaps every
+   session's transcript read the same way, so the whole scan runs concurrently.
+   Keep it that way. The `node:fs` calls there (directory listing, mtime/
+   birthtime, and the `--capture-usage` mkdir + atomic temp-file rename) stay
+   synchronous — they have no `Bun.file` equivalent. **The platform `/proc`
+   reader is the exception:** `src/proc/linux.ts` reads `/proc` *contents*
+   synchronously via `readFileSync`/`readlinkSync` — procfs has no `Bun.file`
+   equivalent and the process table is gathered synchronously anyway. That's
+   intentional; don't "fix" it to async.
 
-2. **Non-interactive parity is a contract.** `--once`, `--json`, and piped
-   output (`isTTY` false) must keep producing a single plain frame and exit, so
-   `cctop --json | jq` and `cctop | grep` work. Only an interactive TTY runs
-   `runApp()`. Don't move TUI-only escape sequences into the shared path.
+2. **Non-interactive parity is a contract.** `--once` and piped output
+   (`isTTY` false) must keep producing a single plain-text frame and exit, and
+   `--json` a single JSON snapshot, so `cctop | grep` and `cctop --json | jq`
+   work. Only an interactive TTY runs `runApp()`. Don't move TUI-only escape
+   sequences into the shared path.
 
 3. **stdin delivers batches.** A single `data` event can carry several
    keypresses (fast typing, or input buffered during startup) and multi-byte
@@ -107,7 +123,7 @@ in-process, so they never hit the process table — they are read from the
    never treat a chunk as one key. Note the PTY translates Enter `\r`→`\n`.
 
 4. **Selection is tracked by a stable key, not a row index.** Rows re-sort every
-   refresh, so the cursor is keyed on `rowKey(r)` = `sessionId ?? pid`
+   refresh, so the cursor is keyed on `rowKey(r)` = `` sessionId ?? `pid:${pid}` ``
    (`reconcile()` clamps when a session disappears). Keep this invariant.
 
 5. **`bun build --compile` leaks a `.bun-build` temp file** (upstream bug
@@ -135,17 +151,37 @@ in-process, so they never hit the process table — they are read from the
 
 ## Verifying changes
 
+- **Run the unit suite:** `make test` (or `bun test`). It covers the
+  transcript/registry/usage parsers and the renderers (`test/*.test.ts`, via the
+  `__test` exports in `collect.ts`); `make lint` does not run it. Run it whenever
+  you touch the collectors or renderers.
 - **Non-interactive / regressions:** `bun cctop.ts --once`, `--json`,
   `bun cctop.ts | cat` (single frame), `-h`, `-v`.
-- **The TUI needs a real PTY** (it requires `isTTY`; piping disables it). Drive
-  it with `expect`, e.g. spawn `bun cctop.ts`, sleep, send keys, then quit with
-  `q` (not Ctrl-C — `\x03` kills Bun before buffered stdin flushes, so keys are
-  lost). The last drawn frame before `q` reflects the final state; quitting draws
-  nothing.
+- **The TUI needs a real terminal** (it requires `isTTY`; piping disables it).
+  Drive it with **tmux**: it provides a real pty, `send-keys` reliably reaches
+  Bun's raw-mode stdin, and `capture-pane -p` prints the *rendered* screen (after
+  all cursor moves) — so you can both see and test the UI. Recipe:
+
+  ```sh
+  tmux new-session -d -x 200 -y 50 -s cctop "bun cctop.ts"  # fixed size = stable layout
+  sleep 4                                                   # let the first frame draw
+  tmux send-keys -t cctop Enter                             # open detail; Escape backs out
+  sleep 1
+  tmux capture-pane -p -t cctop                             # print the on-screen state
+  tmux send-keys -t cctop q                                 # q exits (not Ctrl-C)
+  tmux kill-server                                          # always clean up
+  ```
+
+  Use `send-keys` names for special keys (`Enter`, `Escape`, `Up`/`Down`) and
+  literal chars for the rest (`j`, `/`, `s`, `x`). Re-`capture-pane` after each
+  key to assert on the new frame. (`expect` is unreliable here — it does not
+  deliver keystrokes to Bun's raw-mode stdin in every environment, so a key like
+  `q` is silently dropped; use tmux.)
 - **Testing the quit action safely:** don't kill real sessions. Back a fake
   registry entry (`~/.claude/sessions/<pid>.json` with `startedAt` ≈ now) with a
-  throwaway `sleep 600 &` process, filter to it, `x` → `y`, and confirm the
-  sleep process got the signal. Clean up the json + process afterward.
+  throwaway `sleep 600 &` process, filter to it (`tmux send-keys` `/`, type the
+  filter, `Enter`), `x` → `y`, and confirm the sleep process got the signal.
+  Clean up the json + process afterward.
 
 ## Spinning up live sub-agents on demand for testing
 

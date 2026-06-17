@@ -135,3 +135,8 @@ export function truncate(s: string, width: number) {
   if (s.length <= width) return s;
   return width <= 1 ? s.slice(0, width) : `${s.slice(0, width - 1)}…`;
 }
+
+// truncate() for a string that carries ANSI: inflate the budget by the invisible
+// escape bytes so the *visible* text is cut to `width` and color codes survive.
+export const truncateStyled = (s: string, width: number) =>
+  truncate(s, width + (s.length - visLen(s)));

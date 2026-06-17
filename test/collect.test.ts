@@ -61,9 +61,12 @@ const row = (overrides: Partial<Instance> = {}): Instance => ({
   lastActivity: null,
   lastMs: 0,
   prompt: null,
+  promptAt: null,
+  lastTurn: null,
   transcript: null,
   subagents: [],
   children: [],
+  orphanPorts: [],
   ...overrides,
 });
 
@@ -389,7 +392,40 @@ describe("transcript file scanning", () => {
       ctx: 1010,
       branch: "feature/parse",
       prompt: "please refactor collect.ts",
+      lastTurn: "on it",
     });
+  });
+
+  test("last turn reports the most recent turn's tool call", async () => {
+    const path = write(
+      "tool-turn.jsonl",
+      jsonl([
+        user("go"),
+        assistant(
+          "claude-sonnet-4",
+          { input_tokens: 5 },
+          [{ type: "tool_use", name: "Edit", input: { file_path: "a/b.ts" } }],
+          { gitBranch: "main" },
+        ),
+      ]),
+    );
+    expect((await __test.transcriptDetails(path)).lastTurn).toBe("Edit: b.ts");
+  });
+
+  test("captures the last prompt's timestamp", async () => {
+    const at = "2026-06-17T12:00:00.000Z";
+    const path = write(
+      "prompt-ts.jsonl",
+      jsonl([
+        user("the prompt", { timestamp: at }),
+        assistant("claude-sonnet-4", { input_tokens: 5 }, [], {
+          gitBranch: "main",
+        }),
+      ]),
+    );
+    expect((await __test.transcriptDetails(path)).promptAt).toBe(
+      Date.parse(at),
+    );
   });
 
   test("skips a half-written final line instead of throwing", async () => {
@@ -725,6 +761,7 @@ describe("sub-process resolution", () => {
     startSec: 0,
     path: null,
     name: "node",
+    uid: 0,
     ...over,
   });
   // build the parent->children index the same way collectRows does
@@ -795,6 +832,50 @@ describe("sub-process resolution", () => {
     expect(__test.subprocsOf(300, idx, cands).map((p) => p.name)).toEqual([
       "mcp-server",
     ]);
+  });
+
+  // port attribution rolls a displayed sub-process's whole subtree up onto its
+  // row, so a `npm run dev` wrapper surfaces the port its child node/vite owns.
+  test("descendants gathers a sub-process subtree but stops at nested sessions", () => {
+    const session = proc({ pid: 500, name: "claude" });
+    const npm = proc({ pid: 501, ppid: 500, name: "npm" });
+    const node = proc({ pid: 502, ppid: 501, name: "node" }); // the listener
+    const nested = proc({ pid: 503, ppid: 501, name: "claude" }); // sub-session
+    const tool = proc({ pid: 504, ppid: 503, name: "go" });
+    const idx = childrenOf([session, npm, node, nested, tool]);
+    const cands = candidatesOf([session, npm, node, nested, tool]);
+    // npm's subtree includes the node that actually listens, but neither the
+    // nested session nor anything under it (those own their own rows / ports)
+    expect(__test.descendants(501, idx, cands).sort((a, b) => a - b)).toEqual([
+      501, 502,
+    ]);
+  });
+});
+
+// projectForCwd attributes an orphan listener to the session whose project dir
+// contains its cwd, used by the stateless orphan-port detection.
+describe("projectForCwd", () => {
+  const dirs = ["/Users/a/src/cctop", "/Users/a/src/flux"];
+
+  test("matches an exact project dir", () => {
+    expect(__test.projectForCwd("/Users/a/src/cctop", dirs)).toBe(
+      "/Users/a/src/cctop",
+    );
+  });
+
+  test("matches a subdirectory of a project", () => {
+    expect(__test.projectForCwd("/Users/a/src/cctop/src/proc", dirs)).toBe(
+      "/Users/a/src/cctop",
+    );
+  });
+
+  test("does not match across a partial path-segment boundary", () => {
+    // /Users/a/src/cctop must not swallow a sibling like .../cctop-old
+    expect(__test.projectForCwd("/Users/a/src/cctop-old", dirs)).toBeNull();
+  });
+
+  test("returns null when no project contains the cwd", () => {
+    expect(__test.projectForCwd("/tmp/somewhere", dirs)).toBeNull();
   });
 });
 

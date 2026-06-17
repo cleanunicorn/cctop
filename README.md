@@ -13,8 +13,8 @@ waiting for input.
 - **All your sessions at a glance** — every running Claude Code session in one
   table: process stats (PID, memory, CPU, uptime), busy/idle state, context
   size, model, host app (terminal or IDE), project, git branch, and last prompt.
-- **Process & sub-agent tree** — each session's sub-processes and live
-  sub-agents are listed beneath it.
+- **Sub-agent & process tree** — live sub-agents (with their latest turn) and
+  each session's sub-processes, open and orphaned TCP ports.
 - **Live TUI** — navigate with the keyboard, open a per-session detail view, and
   filter and sort on the fly; piped or run with `--once` it prints a single frame.
 - **Status at a glance** — busy sessions are green, idle red; CPU and context
