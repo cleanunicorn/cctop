@@ -137,15 +137,31 @@ in-process, so they never hit the process table — they are read from the
 
 - **Non-interactive / regressions:** `bun cctop.ts --once`, `--json`,
   `bun cctop.ts | cat` (single frame), `-h`, `-v`.
-- **The TUI needs a real PTY** (it requires `isTTY`; piping disables it). Drive
-  it with `expect`, e.g. spawn `bun cctop.ts`, sleep, send keys, then quit with
-  `q` (not Ctrl-C — `\x03` kills Bun before buffered stdin flushes, so keys are
-  lost). The last drawn frame before `q` reflects the final state; quitting draws
-  nothing.
+- **The TUI needs a real terminal** (it requires `isTTY`; piping disables it).
+  Drive it with **tmux**: it provides a real pty, `send-keys` reliably reaches
+  Bun's raw-mode stdin, and `capture-pane -p` prints the *rendered* screen (after
+  all cursor moves) — so you can both see and test the UI. Recipe:
+
+  ```sh
+  tmux new-session -d -x 200 -y 50 -s cctop "bun cctop.ts"  # fixed size = stable layout
+  sleep 4                                                   # let the first frame draw
+  tmux send-keys -t cctop Enter                             # open detail; Escape backs out
+  sleep 1
+  tmux capture-pane -p -t cctop                             # print the on-screen state
+  tmux send-keys -t cctop q                                 # q exits (not Ctrl-C)
+  tmux kill-server                                          # always clean up
+  ```
+
+  Use `send-keys` names for special keys (`Enter`, `Escape`, `Up`/`Down`) and
+  literal chars for the rest (`j`, `/`, `s`, `x`). Re-`capture-pane` after each
+  key to assert on the new frame. (`expect` is unreliable here — it does not
+  deliver keystrokes to Bun's raw-mode stdin in every environment, so a key like
+  `q` is silently dropped; use tmux.)
 - **Testing the quit action safely:** don't kill real sessions. Back a fake
   registry entry (`~/.claude/sessions/<pid>.json` with `startedAt` ≈ now) with a
-  throwaway `sleep 600 &` process, filter to it, `x` → `y`, and confirm the
-  sleep process got the signal. Clean up the json + process afterward.
+  throwaway `sleep 600 &` process, filter to it (`tmux send-keys` `/`, type the
+  filter, `Enter`), `x` → `y`, and confirm the sleep process got the signal.
+  Clean up the json + process afterward.
 
 ## Spinning up live sub-agents on demand for testing
 
