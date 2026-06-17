@@ -14,6 +14,14 @@ export interface SubProc {
   ports: number[]; // listening TCP ports this process owns (usually empty)
 }
 
+// A listening server reparented to init (its starting parent has exited) whose
+// cwd sits inside this session's project: a dev server a run left behind.
+export interface OrphanPort {
+  pid: number;
+  name: string;
+  ports: number[];
+}
+
 export interface SubAgent {
   model: string | null;
   ctx: number | null;
@@ -45,6 +53,7 @@ export interface Instance {
   transcript: string | null;
   subagents: SubAgent[];
   children: SubProc[];
+  orphanPorts: OrphanPort[];
 }
 
 // An instance before its live sub-agents are attached (the second, sequential

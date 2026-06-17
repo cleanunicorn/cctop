@@ -30,6 +30,7 @@ const baseRow = (overrides: Partial<Instance> = {}): Instance => ({
   transcript: "/Users/alice/.claude/projects/cctop/session-1.jsonl",
   subagents: [],
   children: [],
+  orphanPorts: [],
   ...overrides,
 });
 
@@ -150,6 +151,18 @@ describe("render helpers", () => {
     expect(detail).toContain("node server.js  :3000 :8080");
     expect(detail).toContain("bash › make build");
     expect(detail).not.toContain("make build  :");
+  });
+
+  test("detail view flags orphan ports with a warning", () => {
+    const row = baseRow({
+      orphanPorts: [{ pid: 4242, name: "node", ports: [3000, 3001] }],
+    });
+    const detail = stripAnsi(renderDetail(row, 120).join("\n"));
+    expect(detail).toContain("Orphan ports (1)");
+    expect(detail).toContain("⚠");
+    expect(detail).toContain("4242");
+    expect(detail).toContain("node");
+    expect(detail).toContain(":3000 :3001");
   });
 
   test("sanitizes untrusted table text while keeping trusted styling", () => {

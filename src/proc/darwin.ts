@@ -278,9 +278,10 @@ export function createDarwinSource(): ProcSource {
           machToSec;
       }
 
-      // pbi_ppid at offset 16, pbi_start_tvsec at offset 120
+      // pbi_ppid at offset 16, pbi_uid at 20, pbi_start_tvsec at offset 120
       let ppid = 0;
       let startSec = 0;
+      let uid = -1;
       let comm: string | null = null;
       const gotBsd = libproc.symbols.proc_pidinfo(
         pid,
@@ -291,11 +292,12 @@ export function createDarwinSource(): ProcSource {
       );
       if (gotBsd >= 128) {
         ppid = bsdView.getUint32(16, true);
+        uid = bsdView.getUint32(20, true);
         startSec = Number(bsdView.getBigUint64(120, true));
       } else if (
         // bsdinfo fails for other users' processes (login, launchd...),
-        // but the host-app ancestry walk still needs their ppid; the
-        // short variant works for any process: ppid at 4, comm at 16
+        // but the host-app ancestry walk still needs their ppid; the short
+        // variant works for any process: ppid at 4, comm at 16, pbsi_uid at 36
         libproc.symbols.proc_pidinfo(
           pid,
           PROC_PIDT_SHORTBSDINFO,
@@ -305,6 +307,7 @@ export function createDarwinSource(): ProcSource {
         ) >= 64
       ) {
         ppid = shortView.getUint32(4, true);
+        uid = shortView.getUint32(36, true);
         const end = shortInfo.indexOf(0, 16);
         comm =
           new TextDecoder().decode(
@@ -321,7 +324,7 @@ export function createDarwinSource(): ProcSource {
         comm ??
         path?.split("/").pop() ??
         "?";
-      procs.push({ pid, ppid, rss, cpuSec, startSec, path, name });
+      procs.push({ pid, ppid, rss, cpuSec, startSec, path, name, uid });
     }
     return procs;
   };

@@ -66,6 +66,7 @@ const row = (overrides: Partial<Instance> = {}): Instance => ({
   transcript: null,
   subagents: [],
   children: [],
+  orphanPorts: [],
   ...overrides,
 });
 
@@ -760,6 +761,7 @@ describe("sub-process resolution", () => {
     startSec: 0,
     path: null,
     name: "node",
+    uid: 0,
     ...over,
   });
   // build the parent->children index the same way collectRows does
@@ -847,6 +849,33 @@ describe("sub-process resolution", () => {
     expect(__test.descendants(501, idx, cands).sort((a, b) => a - b)).toEqual([
       501, 502,
     ]);
+  });
+});
+
+// projectForCwd attributes an orphan listener to the session whose project dir
+// contains its cwd, used by the stateless orphan-port detection.
+describe("projectForCwd", () => {
+  const dirs = ["/Users/a/src/cctop", "/Users/a/src/flux"];
+
+  test("matches an exact project dir", () => {
+    expect(__test.projectForCwd("/Users/a/src/cctop", dirs)).toBe(
+      "/Users/a/src/cctop",
+    );
+  });
+
+  test("matches a subdirectory of a project", () => {
+    expect(__test.projectForCwd("/Users/a/src/cctop/src/proc", dirs)).toBe(
+      "/Users/a/src/cctop",
+    );
+  });
+
+  test("does not match across a partial path-segment boundary", () => {
+    // /Users/a/src/cctop must not swallow a sibling like .../cctop-old
+    expect(__test.projectForCwd("/Users/a/src/cctop-old", dirs)).toBeNull();
+  });
+
+  test("returns null when no project contains the cwd", () => {
+    expect(__test.projectForCwd("/tmp/somewhere", dirs)).toBeNull();
   });
 });
 

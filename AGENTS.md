@@ -70,8 +70,9 @@ src/proc/       per-platform sources behind that facade: darwin.ts (libproc FFI)
 src/collect.ts  orchestrator: correlates the process table + session registry +
                 transcripts into Instance[]; exports collectRows(filter), matchRow()
 src/collect/    one collector per data source: sessions, usage, transcript,
-                subagents, process-tree (HOST + sub-process tree), network;
-                plus entry/types/paths leaf helpers shared between them
+                subagents, process-tree (HOST + sub-process tree), network,
+                orphans (leftover dev-server ports); plus entry/types/paths
+                leaf helpers shared between them
 ```
 
 Data flow: `proc.ts` + the session registry + transcripts → `collect.ts`

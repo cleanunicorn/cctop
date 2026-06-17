@@ -6,8 +6,9 @@
 // rows the UI renders. All read-only; spawns nothing.
 //
 // This module is the orchestrator. Each data source lives in its own collector
-// under ./collect/ (sessions, usage, transcript, subagents, process-tree); the
-// per-source caches and their prune() functions are co-located there. The two
+// under ./collect/ (sessions, usage, transcript, subagents, process-tree,
+// orphans); the per-source caches and their prune() functions are co-located
+// there. The two
 // invariants that must stay here are candidate selection and the order of the
 // two passes: transcripts are read concurrently (Promise.all), then sub-agents
 // are attached sequentially so sessions sharing a transcript can't both claim
@@ -15,6 +16,7 @@
 
 import { statSync } from "node:fs";
 import { describeAssistant } from "./collect/entry.ts";
+import { attachOrphanPorts, projectForCwd } from "./collect/orphans.ts";
 import { projectDir } from "./collect/paths.ts";
 import {
   cpuPercent,
@@ -47,7 +49,12 @@ import { cwdOf, listAllProcesses, listeningPorts } from "./proc.ts";
 
 export type { NetRate } from "./collect/network.ts";
 export { netThroughput } from "./collect/network.ts";
-export type { Instance, SubAgent, SubProc } from "./collect/types.ts";
+export type {
+  Instance,
+  OrphanPort,
+  SubAgent,
+  SubProc,
+} from "./collect/types.ts";
 export type { Usage } from "./collect/usage.ts";
 export { captureUsage, readUsage } from "./collect/usage.ts";
 
@@ -80,6 +87,7 @@ export const __test = {
   indexChildren,
   subprocsOf,
   descendants,
+  projectForCwd,
 };
 
 export async function collectRows(filter: string | null): Promise<Instance[]> {
@@ -193,12 +201,16 @@ export async function collectRows(filter: string | null): Promise<Instance[]> {
             uptimeSec: c.startSec ? nowMs / 1000 - c.startSec : 0,
             ports: portsFor(c.pid),
           })),
+        orphanPorts: [], // filled after all rows are known (attribution by cwd)
       };
     }),
   );
 
   const seenAgents = new Set<string>();
   const rows = await attachSubagentsInOrder(rowBases, nowMs, seenAgents);
+  // leftover dev servers (parent exited, port still open), keyed to sessions by
+  // cwd; resolved here since it needs every row's project known up front
+  attachOrphanPorts(rows, procs, candidatePids);
 
   // drop caches for sessions/sub-agents that left the table; each cache is
   // pruned by its owning module so its lifetime stays where it is defined

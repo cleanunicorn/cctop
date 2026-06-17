@@ -14,6 +14,7 @@ export interface Proc {
   startSec: number; // process start, unix seconds
   path: string | null; // executable path
   name: string; // argv[0] basename or best-effort
+  uid: number; // owning user id; -1 when unreadable (a proc we don't own)
 }
 
 export interface IfCounters {

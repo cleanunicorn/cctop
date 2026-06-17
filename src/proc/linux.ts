@@ -33,6 +33,8 @@ export function createLinuxSource(): ProcSource {
 
         const status = readFileSync(`/proc/${pid}/status`, "utf8");
         const rssKb = Number(status.match(/^VmRSS:\s+(\d+) kB/m)?.[1] ?? 0);
+        // "Uid:\t<real>\t<eff>\t..."; the real uid identifies the owner
+        const uid = Number(status.match(/^Uid:\s+(\d+)/m)?.[1] ?? -1);
 
         let path: string | null = null;
         try {
@@ -54,6 +56,7 @@ export function createLinuxSource(): ProcSource {
           startSec,
           path,
           name,
+          uid,
         });
       } catch {} // process exited mid-scan
     }

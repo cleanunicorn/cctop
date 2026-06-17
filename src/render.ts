@@ -30,6 +30,7 @@ import {
   stateWord,
   tildePath,
   truncate,
+  truncateStyled,
   visLen,
 } from "./format.ts";
 
@@ -106,14 +107,16 @@ const subProcCells = (c: SubProc) => ({
   ports: c.ports,
 });
 
+// listening ports joined for display: ":3000 :8080". The one place the port
+// display format lives, shared by the live (green) and orphan (red) renderers.
+const portList = (ports: number[]) => ports.map((p) => `:${p}`).join(" ");
+
 // the green " :3000 :8080" tail trailing a sub-process name (a listening server
 // reads as live), or "" when it listens on nothing. Shared by the list tree and
 // the detail view so both render ports identically; the leading two spaces sit
 // outside any surrounding dim so the green stays bright.
 const portTail = (ports: number[]) =>
-  ports.length
-    ? `  ${BRIGHT_GREEN}${ports.map((p) => `:${p}`).join(" ")}${RESET}`
-    : "";
+  ports.length ? `  ${BRIGHT_GREEN}${portList(ports)}${RESET}` : "";
 
 // Paint a session cell: status dot, heat-colored cpu/ctx, dimmed units,
 // dimmed placeholders; everything else as-is.
@@ -645,7 +648,7 @@ export function renderDetail(r: Instance, termCols: number): string[] {
       const line = `${CYAN}◆${RESET} ${model} · ${ac} ctx · up ${formatDuration(
         a.uptimeSec,
       )}${a.activity ? ` · ${safe(a.activity)}` : ""}`;
-      out.push(truncate(line, width + (line.length - visLen(line))));
+      out.push(truncateStyled(line, width));
     }
   }
 
@@ -667,6 +670,22 @@ export function renderDetail(r: Instance, termCols: number): string[] {
       const tail = portTail(c.ports);
       const room = Math.max(width - stats.length - 2 - visLen(tail), 8);
       out.push(`${DIM}${stats}${RESET}  ${truncate(cell.name, room)}${tail}`);
+    }
+  }
+
+  // leftover servers from this project whose parent process has exited (they
+  // reparented to init) — a forgotten dev server still holding its port. Flagged
+  // in red since, unlike a live sub-process's port, nothing is supervising it.
+  if (r.orphanPorts.length) {
+    out.push("");
+    out.push(
+      `${BOLD}Orphan ports${RESET} ${DIM}(${r.orphanPorts.length})${RESET}`,
+    );
+    for (const o of r.orphanPorts) {
+      const line = `${RED}⚠${RESET} ${pad(String(o.pid), 6, true)} ${safe(
+        o.name,
+      )}  ${RED}${portList(o.ports)}${RESET}`;
+      out.push(truncateStyled(line, width));
     }
   }
   return out;
