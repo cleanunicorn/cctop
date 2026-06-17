@@ -50,6 +50,7 @@ describe("render helpers", () => {
               mem: 128 * 1024 * 1024,
               cpu: 1.5,
               uptimeSec: 10,
+              ports: [5173],
             },
           ],
           subagents: [
@@ -95,6 +96,7 @@ describe("render helpers", () => {
       mem: 1024 * 1024,
       cpu: 0.1,
       uptimeSec: 120,
+      ports: [],
     }));
     const row = baseRow({ subagents, children });
 
@@ -120,6 +122,34 @@ describe("render helpers", () => {
     expect(detail).toContain("│"); // quoted blocks get a left gutter
   });
 
+  test("detail view lists a sub-process's listening ports", () => {
+    const row = baseRow({
+      children: [
+        {
+          pid: 12346,
+          name: "node server.js",
+          mem: 64 * 1024 * 1024,
+          cpu: 2.0,
+          uptimeSec: 30,
+          ports: [3000, 8080],
+        },
+        {
+          pid: 12347,
+          name: "bash › make build",
+          mem: 1024 * 1024,
+          cpu: 0,
+          uptimeSec: 5,
+          ports: [],
+        },
+      ],
+    });
+    const detail = stripAnsi(renderDetail(row, 120).join("\n"));
+    // a listening process shows each port; one with none shows no stray colon
+    expect(detail).toContain("node server.js  :3000 :8080");
+    expect(detail).toContain("bash › make build");
+    expect(detail).not.toContain("make build  :");
+  });
+
   test("sanitizes untrusted table text while keeping trusted styling", () => {
     const frame = buildFrame(
       [
@@ -135,6 +165,7 @@ describe("render helpers", () => {
               mem: 0,
               cpu: 0,
               uptimeSec: 1,
+              ports: [],
             },
           ],
           subagents: [

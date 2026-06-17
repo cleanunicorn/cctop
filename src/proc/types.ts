@@ -33,6 +33,13 @@ export interface ProcSource {
   listAllProcesses: () => Proc[];
   // Current working directory of a pid, or null if it can't be read.
   cwdOf: (pid: number) => string | null;
+  // Listening TCP ports owned by each of the given pids: pid -> sorted, unique
+  // ports. Surfaces forgotten dev servers a session left running. Read-only:
+  // Linux maps /proc/net/tcp[6] LISTEN inodes to /proc/<pid>/fd sockets; macOS
+  // walks each pid's socket fds via libproc. Scoped to `pids` (a session's
+  // sub-processes) rather than every pid on the host. Pids with no listening
+  // socket are absent from the map.
+  listeningPorts: (pids: Iterable<number>) => Map<number, number[]>;
   // Per-interface cumulative byte counters for every real (non-loopback)
   // interface, machine-wide — not per-process (no read-only per-pid network
   // counter exists on either platform). Returned per-interface (not pre-summed)

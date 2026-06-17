@@ -18,6 +18,19 @@ export function createDarwinSource(): ProcSource {
   const CTL_KERN = 1;
   const KERN_PROCARGS2 = 49;
 
+  // listening-port discovery via libproc fd introspection. Flavor selectors,
+  // the fd-type tag, and the socket_fdinfo field offsets below were taken from
+  // <sys/proc_info.h> (LP64) and verified with offsetof; they are load-bearing.
+  const PROC_PIDLISTFDS = 1; // flavor: array of struct proc_fdinfo (8 bytes ea)
+  const PROC_PIDFDSOCKETINFO = 3; // flavor: struct socket_fdinfo for one fd
+  const PROX_FDTYPE_SOCKET = 2; // proc_fdinfo.proc_fdtype for a socket fd
+  const SOCKET_FDINFO_SIZE = 792; // sizeof(struct socket_fdinfo)
+  const SOI_KIND_OFF = 256; // socket_info.soi_kind (int)
+  const SOCKINFO_TCP = 2; // soi_kind value for a TCP socket
+  const TCPSI_STATE_OFF = 344; // tcp_sockinfo.tcpsi_state (int)
+  const TCPS_LISTEN = 1; // tcpsi_state value for a listening socket
+  const INSI_LPORT_OFF = 268; // in_sockinfo.insi_lport (int, network order)
+
   const libproc = dlopen("/usr/lib/libproc.dylib", {
     proc_listallpids: {
       args: [FFIType.ptr, FFIType.i32],
@@ -33,6 +46,11 @@ export function createDarwinSource(): ProcSource {
     },
     proc_pidinfo: {
       args: [FFIType.i32, FFIType.i32, FFIType.u64, FFIType.ptr, FFIType.i32],
+      returns: FFIType.i32,
+    },
+    // per-fd socket info: fills a struct socket_fdinfo for one fd of a pid
+    proc_pidfdinfo: {
+      args: [FFIType.i32, FFIType.i32, FFIType.i32, FFIType.ptr, FFIType.i32],
       returns: FFIType.i32,
     },
   });
@@ -160,6 +178,69 @@ export function createDarwinSource(): ProcSource {
     return out;
   };
 
+  // Listening TCP ports per pid, via libproc fd introspection (what lsof does
+  // internally, but in-process — no `lsof` spawn). For each pid: list its fds
+  // (PROC_PIDLISTFDS), and for every socket fd pull its socket_fdinfo
+  // (PROC_PIDFDSOCKETINFO), keeping TCP sockets in the LISTEN state and reading
+  // their local port. The fd-list buffer grows on demand for processes that
+  // hold many fds; the socket_fdinfo buffer is fixed-size and reused.
+  let fdList = new Uint8Array(8 * 1024); // 1024 proc_fdinfo entries to start
+  let fdView = new DataView(fdList.buffer); // rebuilt only when fdList grows
+  const sockInfo = new Uint8Array(SOCKET_FDINFO_SIZE);
+  const sockView = new DataView(sockInfo.buffer);
+  const listeningPorts = (pids: Iterable<number>): Map<number, number[]> => {
+    const ports = new Map<number, number[]>();
+    for (const pid of pids) {
+      // size the fd list first (null buffer returns the byte count needed),
+      // then fetch it; a 0/negative count means no fds or not ours to read
+      const need = libproc.symbols.proc_pidinfo(
+        pid,
+        PROC_PIDLISTFDS,
+        0n,
+        null,
+        0,
+      );
+      if (need <= 0) continue;
+      if (need > fdList.byteLength) {
+        fdList = new Uint8Array(need);
+        fdView = new DataView(fdList.buffer);
+      }
+      const got = libproc.symbols.proc_pidinfo(
+        pid,
+        PROC_PIDLISTFDS,
+        0n,
+        ptr(fdList),
+        fdList.byteLength,
+      );
+      const found = new Set<number>();
+      // each proc_fdinfo is { int32 proc_fd; uint32 proc_fdtype }
+      for (let off = 0; off + 8 <= got; off += 8) {
+        if (fdView.getUint32(off + 4, true) !== PROX_FDTYPE_SOCKET) continue;
+        const fd = fdView.getInt32(off, true);
+        const r = libproc.symbols.proc_pidfdinfo(
+          pid,
+          fd,
+          PROC_PIDFDSOCKETINFO,
+          ptr(sockInfo),
+          sockInfo.byteLength,
+        );
+        if (r < SOCKET_FDINFO_SIZE) continue; // not a socket, or short read
+        if (sockView.getInt32(SOI_KIND_OFF, true) !== SOCKINFO_TCP) continue;
+        if (sockView.getInt32(TCPSI_STATE_OFF, true) !== TCPS_LISTEN) continue;
+        // insi_lport holds a network-byte-order port in an int; a big-endian
+        // read of its low two bytes yields the host-order port directly
+        const port = sockView.getUint16(INSI_LPORT_OFF, false);
+        if (port) found.add(port);
+      }
+      if (found.size)
+        ports.set(
+          pid,
+          [...found].sort((a, b) => a - b),
+        );
+    }
+    return ports;
+  };
+
   const listAllProcesses = (): Proc[] => {
     const pids = new Int32Array(16384);
     const n = libproc.symbols.proc_listallpids(ptr(pids), pids.byteLength);
@@ -245,5 +326,5 @@ export function createDarwinSource(): ProcSource {
     return procs;
   };
 
-  return { listAllProcesses, cwdOf, netCounters };
+  return { listAllProcesses, cwdOf, netCounters, listeningPorts };
 }

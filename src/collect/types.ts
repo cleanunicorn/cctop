@@ -11,6 +11,7 @@ export interface SubProc {
   mem: number;
   cpu: number;
   uptimeSec: number;
+  ports: number[]; // listening TCP ports this process owns (usually empty)
 }
 
 export interface SubAgent {

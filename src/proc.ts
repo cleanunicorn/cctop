@@ -39,5 +39,8 @@ export const listAllProcesses = (): ReturnType<
 > => source.listAllProcesses();
 export const cwdOf = (pid: number): ReturnType<ProcSource["cwdOf"]> =>
   source.cwdOf(pid);
+export const listeningPorts = (
+  pids: Iterable<number>,
+): ReturnType<ProcSource["listeningPorts"]> => source.listeningPorts(pids);
 export const netCounters = (): ReturnType<ProcSource["netCounters"]> =>
   source.netCounters();

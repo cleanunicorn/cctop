@@ -42,7 +42,7 @@ import {
 } from "./collect/transcript.ts";
 import type { Instance, InstanceBase } from "./collect/types.ts";
 import { parseUsage } from "./collect/usage.ts";
-import { cwdOf, listAllProcesses } from "./proc.ts";
+import { cwdOf, listAllProcesses, listeningPorts } from "./proc.ts";
 
 export type { NetRate } from "./collect/network.ts";
 export { netThroughput } from "./collect/network.ts";
@@ -98,12 +98,21 @@ export async function collectRows(filter: string | null): Promise<Instance[]> {
   // drop samples of processes that left the table, so the map stays small;
   // keep sessions and their sub-processes, both of which show a live %CPU
   const current = new Set<number>();
+  const childPids = new Set<number>();
   for (const p of candidates) {
     current.add(p.pid);
-    for (const c of subprocsOf(p.pid, childrenOf, candidatePids))
+    for (const c of subprocsOf(p.pid, childrenOf, candidatePids)) {
       current.add(c.pid);
+      childPids.add(c.pid);
+    }
   }
   pruneCpuSamples(current);
+
+  // listening ports resolved once for the whole scan, so each child row can
+  // surface the dev servers / open ports it left running. Scoped to the
+  // sub-processes only: the session (claude/node) procs hold many fds and never
+  // listen, so scanning them would waste syscalls on every refresh.
+  const portsByPid = listeningPorts(childPids);
 
   // Transcript reads can overlap across sessions, but sub-agent directory claims
   // happen later in this same candidate order. That keeps sessions which fall
@@ -167,6 +176,7 @@ export async function collectRows(filter: string | null): Promise<Instance[]> {
             mem: c.rss,
             cpu: cpuPercent(c, nowMs),
             uptimeSec: c.startSec ? nowMs / 1000 - c.startSec : 0,
+            ports: portsByPid.get(c.pid) ?? [],
           })),
       };
     }),

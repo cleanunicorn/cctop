@@ -6,7 +6,7 @@
 // functions over already-collected rows; the interactive runtime (app.ts)
 // layers selection, scrolling, and overlays on top.
 
-import type { Instance, NetRate, Usage } from "./collect.ts";
+import type { Instance, NetRate, SubProc, Usage } from "./collect.ts";
 import {
   BLUE,
   BOLD,
@@ -91,6 +91,19 @@ const isNew = (r: Instance) => !r.prompt && !r.lastTurn && !r.contextTokens;
 // lines up with undated ids like "opus-4-8" across sessions and sub-agents.
 const shortModel = (m: string | null | undefined) =>
   m?.replace(/^claude-/, "").replace(/-\d{8}$/, "");
+
+// pid/mem/cpu/uptime + sanitized name of a sub-process, formatted to display
+// strings. Shared by the list-view child cells and the detail-view sub-process
+// row so both format a SubProc identically; the two differ only in how they pad
+// and color these (the table aligns them under the session columns and dims the
+// whole row, the detail panel uses fixed widths and shows the name normally).
+const subProcCells = (c: SubProc) => ({
+  pid: String(c.pid),
+  mem: formatMem(c.mem),
+  cpu: `${c.cpu.toFixed(1)}%`,
+  up: formatDuration(c.uptimeSec),
+  name: safe(c.name),
+});
 
 // Paint a session cell: status dot, heat-colored cpu/ctx, dimmed units,
 // dimmed placeholders; everything else as-is.
@@ -200,13 +213,7 @@ export function buildFrame(
       last: r.lastMs ? formatDuration((nowMs - r.lastMs) / 1000) : "-",
       prompt: isNew(r) ? "new session" : safe(r.prompt ?? r.sessionName),
     } as Cells,
-    children: r.children.map((c) => ({
-      pid: String(c.pid),
-      mem: formatMem(c.mem),
-      cpu: `${c.cpu.toFixed(1)}%`,
-      up: formatDuration(c.uptimeSec),
-      name: safe(c.name),
-    })),
+    children: r.children.map(subProcCells),
     subagents: r.subagents.map((a) => ({
       ...a,
       model: a.model ? safe(a.model) : null,
@@ -309,9 +316,7 @@ export function buildFrame(
     }).join("  ");
     const head = `${branch}  ${stats}  `;
     const room = Math.max(termCols - visLen(head), 8);
-    const name =
-      c.name.length > room ? `${c.name.slice(0, room - 1)}…` : c.name;
-    return `${DIM}${head}${name}${RESET}`;
+    return `${DIM}${head}${truncate(c.name, room)}${RESET}`;
   };
 
   // a live sub-agent row: branches off the same spine as the processes, but it
@@ -639,17 +644,20 @@ export function renderDetail(r: Instance, termCols: number): string[] {
       `${BOLD}Sub-processes${RESET} ${DIM}(${r.children.length})${RESET}`,
     );
     for (const c of r.children) {
-      const stats = `${pad(String(c.pid), 6, true)} ${pad(
-        formatMem(c.mem),
-        5,
+      const cell = subProcCells(c);
+      const stats = `${pad(cell.pid, 6, true)} ${pad(cell.mem, 5, true)} ${pad(
+        cell.cpu,
+        6,
         true,
-      )} ${pad(`${c.cpu.toFixed(1)}%`, 6, true)} ${pad(
-        formatDuration(c.uptimeSec),
-        3,
-        true,
-      )}`;
-      const room = Math.max(width - stats.length - 3, 8);
-      out.push(`${DIM}${stats}${RESET}  ${truncate(safe(c.name), room)}`);
+      )} ${pad(cell.up, 3, true)}`;
+      // listening ports trail the name (green, like a live server); reserve
+      // their width so the name truncates around them rather than over them
+      const ports = c.ports.map((p) => `:${p}`).join(" ");
+      const portTail = ports ? `  ${BRIGHT_GREEN}${ports}${RESET}` : "";
+      const room = Math.max(width - stats.length - 3 - visLen(portTail), 8);
+      out.push(
+        `${DIM}${stats}${RESET}  ${truncate(cell.name, room)}${portTail}`,
+      );
     }
   }
   return out;

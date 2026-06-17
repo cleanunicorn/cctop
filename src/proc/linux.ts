@@ -67,6 +67,61 @@ export function createLinuxSource(): ProcSource {
     }
   };
 
+  // Listening ports per pid, in two steps (mirrors what lsof does):
+  // 1. /proc/net/tcp + tcp6 give every socket's state, local port, and inode;
+  //    keep only LISTEN sockets (st field == "0A") as inode -> port.
+  // 2. for each requested pid, read /proc/<pid>/fd: a socket fd readlinks to
+  //    "socket:[<inode>]", so a matching inode attributes that port to the pid.
+  // Both are plain /proc reads — no socket is opened, nothing is spawned.
+  const listeningPorts = (pids: Iterable<number>): Map<number, number[]> => {
+    const inodeToPort = new Map<string, number>();
+    for (const path of ["/proc/net/tcp", "/proc/net/tcp6"]) {
+      let data: string;
+      try {
+        data = readFileSync(path, "utf8");
+      } catch {
+        continue; // tcp6 absent when IPv6 is disabled
+      }
+      // columns: sl local_address rem_address st ... inode; the line is
+      // space-padded, so split the trimmed line on runs of whitespace
+      for (const line of data.split("\n").slice(1)) {
+        const f = line.trim().split(/\s+/);
+        if (f.length < 10 || f[3] !== "0A") continue; // 0A = TCP_LISTEN
+        const port = Number.parseInt(f[1].split(":")[1], 16);
+        if (port) inodeToPort.set(f[9], port);
+      }
+    }
+
+    const ports = new Map<number, number[]>();
+    if (!inodeToPort.size) return ports;
+    for (const pid of pids) {
+      let fds: string[];
+      try {
+        fds = readdirSync(`/proc/${pid}/fd`);
+      } catch {
+        continue; // not ours to inspect, or exited mid-scan
+      }
+      const found = new Set<number>();
+      for (const fd of fds) {
+        let target: string;
+        try {
+          target = readlinkSync(`/proc/${pid}/fd/${fd}`);
+        } catch {
+          continue; // fd closed mid-scan
+        }
+        const inode = target.match(/^socket:\[(\d+)\]$/)?.[1];
+        const port = inode && inodeToPort.get(inode);
+        if (port) found.add(port);
+      }
+      if (found.size)
+        ports.set(
+          pid,
+          [...found].sort((a, b) => a - b),
+        );
+    }
+    return ports;
+  };
+
   // Snapshot the interface byte counters from /proc/net/dev (parseProcNetDev
   // does the parsing); a read failure signals null rather than a bogus zero.
   const netCounters = () => {
@@ -77,5 +132,5 @@ export function createLinuxSource(): ProcSource {
     }
   };
 
-  return { listAllProcesses, cwdOf, netCounters };
+  return { listAllProcesses, cwdOf, netCounters, listeningPorts };
 }
