@@ -156,6 +156,7 @@ export async function collectRows(filter: string | null): Promise<Instance[]> {
         lastActivity: lastMs ? new Date(lastMs).toISOString() : null,
         lastMs,
         prompt: details.prompt ?? null,
+        promptAt: details.promptAt ?? null,
         lastTurn: details.lastTurn ?? null,
         transcript: mtimeMs ? transcript : null,
         children: subprocsOf(p.pid, childrenOf, candidatePids)

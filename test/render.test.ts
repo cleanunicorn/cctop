@@ -3,7 +3,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { Instance, Usage } from "../src/collect.ts";
-import { RED, stripAnsi, YELLOW } from "../src/format.ts";
+import { BLUE, BOLD, RED, RESET, stripAnsi, YELLOW } from "../src/format.ts";
 import { buildFrame, renderDetail, rowKey, usageLine } from "../src/render.ts";
 
 const baseRow = (overrides: Partial<Instance> = {}): Instance => ({
@@ -25,6 +25,7 @@ const baseRow = (overrides: Partial<Instance> = {}): Instance => ({
   lastActivity: "2026-06-13T12:00:00.000Z",
   lastMs: Date.now(),
   prompt: "implement tests",
+  promptAt: Date.now() - 120_000,
   lastTurn: "Edit: render.ts",
   transcript: "/Users/alice/.claude/projects/cctop/session-1.jsonl",
   subagents: [],
@@ -114,7 +115,9 @@ describe("render helpers", () => {
     expect(detail).toContain("Bash: job 12");
     expect(detail).toContain("bash › sleep 11");
     expect(detail).toContain("Last Turn");
-    expect(detail).toContain("Edit: render.ts");
+    // the tool name is tagged and the colon dropped: "Edit: render.ts" → "Edit render.ts"
+    expect(detail).toContain("Edit render.ts");
+    expect(detail).toContain("│"); // quoted blocks get a left gutter
   });
 
   test("sanitizes untrusted table text while keeping trusted styling", () => {
@@ -175,8 +178,88 @@ describe("render helpers", () => {
     expect(raw).not.toContain("\x1b]52");
     expect(raw).not.toContain("\x1b[2J");
     expect(stripAnsi(raw)).toContain("prompt text");
-    expect(stripAnsi(raw)).toContain("Bash: ls");
+    expect(stripAnsi(raw)).toContain("Bash ls");
     expect(stripAnsi(raw)).toContain("/tmp/log.jsonl");
+  });
+
+  test("renders inline markdown (bold + code) in a text turn", () => {
+    const raw = renderDetail(
+      baseRow({ lastTurn: "squashed into **ahead 1** at `e0d7429` now" }),
+      80,
+    ).join("\n");
+    // bold wraps the bolded word; inline code is blue
+    expect(raw).toContain(`${BOLD}ahead${RESET}`);
+    expect(raw).toContain(`${BLUE}e0d7429${RESET}`);
+    // markers are stripped from the visible text
+    const plain = stripAnsi(raw);
+    expect(plain).toContain("ahead 1");
+    expect(plain).toContain("e0d7429");
+    expect(plain).not.toContain("**");
+    expect(plain).not.toContain("`");
+  });
+
+  test("marks a brand-new session (no prompt/turn/context) in list and detail", () => {
+    const fresh = baseRow({
+      prompt: null,
+      lastTurn: null,
+      promptAt: null,
+      contextTokens: null,
+      sessionName: "Fresh Start",
+    });
+    // list: the PROMPT column reads "new session", not the session name
+    const frame = buildFrame([fresh], 160);
+    const rowLine = stripAnsi(frame.groups[0].lines[0]);
+    expect(rowLine).toContain("new session");
+    expect(rowLine).not.toContain("Fresh Start");
+    // detail: one note, no Last Turn block
+    const detail = stripAnsi(renderDetail(fresh, 120).join("\n"));
+    expect(detail).toContain("new session — nothing yet");
+    expect(detail).not.toContain("Last Turn");
+
+    // a session with any activity is not "new"
+    const active = stripAnsi(
+      renderDetail(baseRow({ contextTokens: 5000 }), 120).join("\n"),
+    );
+    expect(active).not.toContain("new session");
+    expect(active).toContain("Last Turn");
+  });
+
+  test("shows last prompt/turn times in the headers, not the state row", () => {
+    const detail = stripAnsi(renderDetail(baseRow(), 120).join("\n"));
+    expect(detail).toMatch(/Last Prompt\s+\d+\w ago/);
+    expect(detail).toMatch(/Last Turn\s+\d+\w ago/);
+    expect(detail).not.toContain("last turn"); // moved out of the state row
+  });
+
+  test("trims a long prompt at the head and a long text turn at the tail", () => {
+    const many = (p: string) =>
+      Array.from({ length: 60 }, (_, i) => `${p}${i}`).join(" ");
+    const lines = renderDetail(
+      baseRow({ prompt: many("P"), lastTurn: many("T") }),
+      50,
+    ).map(stripAnsi);
+    const blockAfter = (header: string) => {
+      const out: string[] = [];
+      for (
+        let i = lines.findIndex((l) => l.startsWith(header)) + 1;
+        lines[i]?.startsWith("│");
+        i++
+      )
+        out.push(lines[i]);
+      return out;
+    };
+    const prompt = blockAfter("Last Prompt");
+    const turn = blockAfter("Last Turn");
+    expect(prompt).toHaveLength(3); // capped to BLOCK_LINES
+    expect(turn).toHaveLength(3);
+    // prompt keeps the head, … trails on the last line
+    expect(prompt.join(" ")).toContain("P0");
+    expect(prompt.join(" ")).not.toContain("P59");
+    expect(prompt[2]).toContain("…");
+    // turn keeps the tail, … leads on the first line
+    expect(turn.join(" ")).toContain("T59");
+    expect(turn.join(" ")).not.toContain("T0");
+    expect(turn[0]).toContain("…");
   });
 });
 

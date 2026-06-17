@@ -8,6 +8,7 @@
 
 import type { Instance, NetRate, Usage } from "./collect.ts";
 import {
+  BLUE,
   BOLD,
   BRIGHT_GREEN,
   CYAN,
@@ -80,6 +81,11 @@ type Cells = Record<string, string>;
 const safe = (s: string | null | undefined, fallback = "-") =>
   sanitizeDisplay(s ?? fallback);
 
+// A session that has just started and done nothing yet: no prompt, no turn, no
+// context. Surfaced as a dim "new session" rather than a blank prompt/empty
+// blocks, so a fresh session reads as fresh instead of broken.
+const isNew = (r: Instance) => !r.prompt && !r.lastTurn && !r.contextTokens;
+
 // Model ids shown compactly: drop the "claude-" prefix and any trailing
 // -YYYYMMDD date stamp, so "claude-haiku-4-5-20251001" reads "haiku-4-5" and
 // lines up with undated ids like "opus-4-8" across sessions and sub-agents.
@@ -101,6 +107,9 @@ function styleCell(key: string, value: string, raw: Instance) {
       const c = ctxColor(raw.contextTokens ?? 0);
       return c ? heatNum(value, c) : value;
     }
+    case "prompt":
+      // a new session's "new session" placeholder reads as dim chrome, not text
+      return isNew(raw) ? `${DIM}${value}${RESET}` : value;
     default:
       return value;
   }
@@ -189,7 +198,7 @@ export function buildFrame(
       project: safe(shortProject(r.project)),
       branch: safe(r.branch),
       last: r.lastMs ? formatDuration((nowMs - r.lastMs) / 1000) : "-",
-      prompt: safe(r.prompt ?? r.sessionName),
+      prompt: isNew(r) ? "new session" : safe(r.prompt ?? r.sessionName),
     } as Cells,
     children: r.children.map((c) => ({
       pid: String(c.pid),
@@ -395,26 +404,156 @@ export function buildFrame(
 
 const label = (s: string) => `${DIM}${pad(s, 9)}${RESET}`;
 
+// A styled span of text: the visible string plus the ANSI prefix to wrap it in
+// (empty for plain). Markers are already stripped from `text`.
+interface MdRun {
+  text: string;
+  style: string;
+}
+
+// One whitespace-delimited word as a list of styled fragments (a word can mix
+// styles, e.g. a code span inside bold) plus its visible width, ready for
+// width-aware wrapping.
+interface MdWord {
+  frags: MdRun[];
+  width: number;
+}
+
+// How many wrapped lines a free-text block (last prompt/turn) keeps before it
+// is trimmed with a …; the detail view shows context, not the whole transcript.
+const BLOCK_LINES = 3;
+
+// Minimal inline-markdown parser for the free-text blocks: the assistant writes
+// GitHub-flavored markdown, so a last turn/prompt carries `**bold**` and
+// `` `inline code` ``. Render bold as bold and inline code as blue, stripping
+// the markers; everything else is literal. Input is already ANSI-sanitized, so
+// the only escapes in the output are the ones added here. Unmatched markers are
+// left as text. Code spans are literal (no bold parsing inside), but a code span
+// nested in bold keeps both styles.
+function parseInlineMd(text: string): MdRun[] {
+  const runs: MdRun[] = [];
+  let bold = false;
+  let buf = "";
+  const flush = (t: string, code: boolean) => {
+    if (t)
+      runs.push({ text: t, style: (bold ? BOLD : "") + (code ? BLUE : "") });
+  };
+  for (let i = 0; i < text.length; ) {
+    if (text[i] === "`") {
+      const end = text.indexOf("`", i + 1);
+      if (end < 0) {
+        buf += text[i++];
+        continue;
+      } // unmatched: literal backtick
+      flush(buf, false);
+      buf = "";
+      flush(text.slice(i + 1, end), true);
+      i = end + 1;
+    } else if (text[i] === "*" && text[i + 1] === "*") {
+      flush(buf, false);
+      buf = "";
+      bold = !bold;
+      i += 2;
+    } else {
+      buf += text[i++];
+    }
+  }
+  flush(buf, false);
+  return runs;
+}
+
+// Split styled runs into whitespace-delimited words, ready for width-aware
+// wrapping with inline markdown applied.
+function mdWords(text: string): MdWord[] {
+  const words: MdWord[] = [];
+  let cur: MdWord | null = null;
+  for (const run of parseInlineMd(text)) {
+    for (const seg of run.text.split(/(\s+)/)) {
+      if (!seg) continue;
+      if (/^\s+$/.test(seg)) {
+        if (cur) {
+          words.push(cur);
+          cur = null;
+        }
+      } else {
+        cur ??= { frags: [], width: 0 };
+        cur.frags.push({ text: seg, style: run.style });
+        cur.width += visLen(seg);
+      }
+    }
+  }
+  if (cur) words.push(cur);
+  return words;
+}
+
+// Words for plain (non-markdown) text: one unstyled fragment each. Used for tool
+// arguments, which are commands — backticks/asterisks there are literal.
+function plainWords(text: string): MdWord[] {
+  return text
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((t) => ({ frags: [{ text: t, style: "" }], width: visLen(t) }));
+}
+
 // A full-screen panel for one session: everything the row truncates, shown
 // in full. Returns the body lines (caller adds title/footer chrome).
 export function renderDetail(r: Instance, termCols: number): string[] {
   const width = Math.max(termCols, 20);
-  const wrap = (text: string, indent = 0): string[] => {
-    const room = Math.max(width - indent, 8);
-    const words = text.split(/\s+/);
-    const out: string[] = [];
-    let line = "";
+
+  // A free-text block (last prompt/turn): wrap styled words to the body width,
+  // mark each line with a dim left gutter so it reads as quoted content, and cap
+  // it to BLOCK_LINES with a dim … where it was cut. `fromEnd` keeps the tail
+  // (… leads) instead of the head (… trails) — used for text turns, whose most
+  // recent / concluding content is at the end. Never splits a word.
+  const gut = `${DIM}│${RESET} `;
+  const ell = `${DIM}…${RESET}`;
+  const renderWord = (w: MdWord) =>
+    w.frags.map((f) => (f.style ? f.style + f.text + RESET : f.text)).join("");
+  const block = (words: MdWord[], fromEnd = false): string[] => {
+    const room = Math.max(width - 2, 8);
+    const wordLines: MdWord[][] = [];
+    let line: MdWord[] = [];
+    let lineW = 0;
     for (const w of words) {
-      if (line && `${line} ${w}`.length > room) {
-        out.push(`${" ".repeat(indent)}${line}`);
-        line = w;
-      } else {
-        line = line ? `${line} ${w}` : w;
+      if (line.length && lineW + 1 + w.width > room) {
+        wordLines.push(line);
+        line = [];
+        lineW = 0;
       }
+      lineW += (line.length ? 1 : 0) + w.width;
+      line.push(w);
     }
-    if (line) out.push(" ".repeat(indent) + line);
-    return out.length ? out : [" ".repeat(indent)];
+    if (line.length) wordLines.push(line);
+    if (!wordLines.length) return [gut];
+    if (wordLines.length <= BLOCK_LINES)
+      return wordLines.map((ws) => gut + ws.map(renderWord).join(" "));
+    // truncated: keep the tail (… leads) or the head (… trails), and drop words
+    // from the cut edge of the … line so " …" / "… " fits within the body width.
+    const lineVis = (ws: MdWord[]) =>
+      ws.reduce((s, w) => s + w.width, 0) + (ws.length - 1);
+    if (fromEnd) {
+      const kept = wordLines.slice(wordLines.length - BLOCK_LINES);
+      const first = kept[0];
+      while (first.length > 1 && lineVis(first) + 2 > room) first.shift();
+      return kept.map(
+        (ws, i) =>
+          gut + (i === 0 ? `${ell} ` : "") + ws.map(renderWord).join(" "),
+      );
+    }
+    const kept = wordLines.slice(0, BLOCK_LINES);
+    const last = kept[BLOCK_LINES - 1];
+    while (last.length > 1 && lineVis(last) + 2 > room) last.pop();
+    return kept.map(
+      (ws, i) =>
+        gut +
+        ws.map(renderWord).join(" ") +
+        (i === BLOCK_LINES - 1 ? ` ${ell}` : ""),
+    );
   };
+
+  // a dim "<duration> ago" suffix for a section header, or "" when no timestamp
+  const agoSuffix = (ms: number | null) =>
+    ms ? `  ${DIM}${formatDuration((Date.now() - ms) / 1000)} ago${RESET}` : "";
 
   const dot = stateDot(r.state);
   const out: string[] = [];
@@ -423,10 +562,7 @@ export function renderDetail(r: Instance, termCols: number): string[] {
   out.push("");
   out.push(`${label("session")}${safe(r.sessionId)}`);
   out.push(`${label("uptime")}${formatDuration(r.uptimeSec)}`);
-  const ago = r.lastMs ? formatDuration((Date.now() - r.lastMs) / 1000) : "-";
-  out.push(
-    `${label("state")}${stateWord(safe(r.state))}  ${DIM}·${RESET}  last turn ${ago} ago`,
-  );
+  out.push(`${label("state")}${stateWord(safe(r.state))}`);
   out.push(`${label("pid")}${r.pid}  ${DIM}·${RESET}  ${safe(r.kind)}`);
   const cpuC = cpuColor(r.cpu);
   const cpuStr = `${r.cpu.toFixed(1)}%`;
@@ -456,12 +592,33 @@ export function renderDetail(r: Instance, termCols: number): string[] {
   }
 
   out.push("");
-  out.push(`${BOLD}Last Prompt${RESET}`);
-  out.push(...wrap(safe(r.prompt ?? r.sessionName), 2));
+  if (isNew(r)) {
+    // nothing to show yet — one dim note in place of the empty prompt/turn blocks
+    out.push(`${BOLD}Last Prompt${RESET}`);
+    out.push(`${DIM}│ new session — nothing yet${RESET}`);
+  } else {
+    out.push(`${BOLD}Last Prompt${RESET}${agoSuffix(r.promptAt)}`);
+    // keep the head: a prompt opens with the actual request
+    out.push(...block(mdWords(safe(r.prompt ?? r.sessionName))));
 
-  out.push("");
-  out.push(`${BOLD}Last Turn${RESET}`);
-  out.push(...wrap(safe(r.lastTurn), 2));
+    out.push("");
+    out.push(`${BOLD}Last Turn${RESET}${agoSuffix(r.lastMs)}`);
+    const turn = safe(r.lastTurn);
+    // describeAssistant renders a tool call as "Tool: arg" — tag the tool name
+    // in cyan (matching the sub-agent rows) as its own word and drop the colon;
+    // the arg is a command, not markdown, so keep the head so the tool stays
+    // visible. A text turn is assistant markdown; keep its tail — the most
+    // recent / often concluding content (a status or a question) is at the end.
+    const tool = r.lastTurn ? turn.match(/^([^\s:]{1,40}): (\S.*)$/) : null;
+    if (tool)
+      out.push(
+        ...block([
+          { frags: [{ text: tool[1], style: CYAN }], width: visLen(tool[1]) },
+          ...plainWords(tool[2]),
+        ]),
+      );
+    else out.push(...block(mdWords(turn), true));
+  }
 
   if (r.subagents.length) {
     out.push("");

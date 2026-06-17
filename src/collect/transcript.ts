@@ -39,12 +39,14 @@ export interface Details {
   model?: string;
   ctx?: number;
   prompt?: string;
+  promptAt?: number; // unix ms of the last user prompt (from its timestamp)
   lastTurn?: string;
 }
 
 // Note what a transcript entry contributes: the newest model + context
 // size (last main-thread assistant turn), the action that turn took, git
-// branch, and last user prompt. Returns true once all details are known.
+// branch, and the last user prompt with its timestamp. Returns true once all
+// details are known.
 export function noteEntry(details: Details, e: any) {
   details.branch ??= e.gitBranch || undefined;
   // synthetic turns (interrupts, errors, injected notices) carry a
@@ -80,8 +82,11 @@ export function noteEntry(details: Details, e: any) {
       }
       text = text.replace(/\s+/g, " ").trim();
       // skip other harness wrappers like <local-command-stdout>
-      if (text && !text.startsWith("<"))
+      if (text && !text.startsWith("<")) {
         details.prompt = truncate(text, PROMPT_MAX);
+        const t = Date.parse(e.timestamp); // ISO 8601; absent/invalid → NaN
+        if (!Number.isNaN(t)) details.promptAt = t;
+      }
     }
   }
   return Boolean(details.model && details.prompt && details.branch);

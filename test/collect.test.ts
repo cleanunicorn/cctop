@@ -61,6 +61,7 @@ const row = (overrides: Partial<Instance> = {}): Instance => ({
   lastActivity: null,
   lastMs: 0,
   prompt: null,
+  promptAt: null,
   lastTurn: null,
   transcript: null,
   subagents: [],
@@ -408,6 +409,22 @@ describe("transcript file scanning", () => {
       ]),
     );
     expect((await __test.transcriptDetails(path)).lastTurn).toBe("Edit: b.ts");
+  });
+
+  test("captures the last prompt's timestamp", async () => {
+    const at = "2026-06-17T12:00:00.000Z";
+    const path = write(
+      "prompt-ts.jsonl",
+      jsonl([
+        user("the prompt", { timestamp: at }),
+        assistant("claude-sonnet-4", { input_tokens: 5 }, [], {
+          gitBranch: "main",
+        }),
+      ]),
+    );
+    expect((await __test.transcriptDetails(path)).promptAt).toBe(
+      Date.parse(at),
+    );
   });
 
   test("skips a half-written final line instead of throwing", async () => {
