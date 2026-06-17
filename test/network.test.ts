@@ -3,7 +3,8 @@
 
 import { describe, expect, test } from "bun:test";
 import { diffRate, makeNetSampler } from "../src/collect/network.ts";
-import { type IfCounters, parseProcNetDev } from "../src/proc.ts";
+import { parseProcNetDev } from "../src/proc/netdev.ts";
+import type { IfCounters } from "../src/proc/types.ts";
 
 const ifs = (
   entries: Record<string, [number, number]>,
