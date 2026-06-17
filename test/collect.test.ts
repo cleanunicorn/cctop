@@ -831,6 +831,23 @@ describe("sub-process resolution", () => {
       "mcp-server",
     ]);
   });
+
+  // port attribution rolls a displayed sub-process's whole subtree up onto its
+  // row, so a `npm run dev` wrapper surfaces the port its child node/vite owns.
+  test("descendants gathers a sub-process subtree but stops at nested sessions", () => {
+    const session = proc({ pid: 500, name: "claude" });
+    const npm = proc({ pid: 501, ppid: 500, name: "npm" });
+    const node = proc({ pid: 502, ppid: 501, name: "node" }); // the listener
+    const nested = proc({ pid: 503, ppid: 501, name: "claude" }); // sub-session
+    const tool = proc({ pid: 504, ppid: 503, name: "go" });
+    const idx = childrenOf([session, npm, node, nested, tool]);
+    const cands = candidatesOf([session, npm, node, nested, tool]);
+    // npm's subtree includes the node that actually listens, but neither the
+    // nested session nor anything under it (those own their own rows / ports)
+    expect(__test.descendants(501, idx, cands).sort((a, b) => a - b)).toEqual([
+      501, 502,
+    ]);
+  });
 });
 
 // cpuPercent is top-style: the delta between two samples once it has a prior,

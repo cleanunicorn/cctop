@@ -18,6 +18,7 @@ import { describeAssistant } from "./collect/entry.ts";
 import { projectDir } from "./collect/paths.ts";
 import {
   cpuPercent,
+  descendants,
   hostApp,
   indexChildren,
   isClaudeProc,
@@ -78,6 +79,7 @@ export const __test = {
   versionFromPath,
   indexChildren,
   subprocsOf,
+  descendants,
 };
 
 export async function collectRows(filter: string | null): Promise<Instance[]> {
@@ -98,21 +100,34 @@ export async function collectRows(filter: string | null): Promise<Instance[]> {
   // drop samples of processes that left the table, so the map stays small;
   // keep sessions and their sub-processes, both of which show a live %CPU
   const current = new Set<number>();
-  const childPids = new Set<number>();
+  // for port attribution, a displayed sub-process should also surface the ports
+  // of the descendants it spawned: subprocsOf shows the `npm run dev` wrapper
+  // while a deeper child (node/vite) owns the actual listening socket. Map each
+  // displayed child to its whole subtree, then scan the union of all subtrees.
+  const childSubtree = new Map<number, number[]>();
+  const portPids = new Set<number>();
   for (const p of candidates) {
     current.add(p.pid);
     for (const c of subprocsOf(p.pid, childrenOf, candidatePids)) {
       current.add(c.pid);
-      childPids.add(c.pid);
+      const subtree = descendants(c.pid, childrenOf, candidatePids);
+      childSubtree.set(c.pid, subtree);
+      for (const pid of subtree) portPids.add(pid);
     }
   }
   pruneCpuSamples(current);
 
-  // listening ports resolved once for the whole scan, so each child row can
-  // surface the dev servers / open ports it left running. Scoped to the
-  // sub-processes only: the session (claude/node) procs hold many fds and never
-  // listen, so scanning them would waste syscalls on every refresh.
-  const portsByPid = listeningPorts(childPids);
+  // listening ports resolved once for the whole scan, scoped to the
+  // sub-process subtrees only: the session (claude/node) procs hold many fds
+  // and never listen, so scanning them would waste syscalls on every refresh.
+  const portsByPid = listeningPorts(portPids);
+  // roll a displayed child's subtree ports up onto its row, sorted and deduped
+  const portsFor = (pid: number): number[] => {
+    const set = new Set<number>();
+    for (const d of childSubtree.get(pid) ?? [pid])
+      for (const port of portsByPid.get(d) ?? []) set.add(port);
+    return [...set].sort((a, b) => a - b);
+  };
 
   // Transcript reads can overlap across sessions, but sub-agent directory claims
   // happen later in this same candidate order. That keeps sessions which fall
@@ -176,7 +191,7 @@ export async function collectRows(filter: string | null): Promise<Instance[]> {
             mem: c.rss,
             cpu: cpuPercent(c, nowMs),
             uptimeSec: c.startSec ? nowMs / 1000 - c.startSec : 0,
-            ports: portsByPid.get(c.pid) ?? [],
+            ports: portsFor(c.pid),
           })),
       };
     }),

@@ -8,6 +8,7 @@
 
 import { readdirSync, readFileSync, readlinkSync } from "node:fs";
 import { parseProcNetDev } from "./netdev.ts";
+import { parseTcpListen } from "./nettcp.ts";
 import type { Proc, ProcSource } from "./types.ts";
 
 export function createLinuxSource(): ProcSource {
@@ -74,6 +75,10 @@ export function createLinuxSource(): ProcSource {
   //    "socket:[<inode>]", so a matching inode attributes that port to the pid.
   // Both are plain /proc reads — no socket is opened, nothing is spawned.
   const listeningPorts = (pids: Iterable<number>): Map<number, number[]> => {
+    const ports = new Map<number, number[]>();
+    const pidList = [...pids];
+    if (!pidList.length) return ports; // nothing to scan; skip the /proc reads
+
     const inodeToPort = new Map<string, number>();
     for (const path of ["/proc/net/tcp", "/proc/net/tcp6"]) {
       let data: string;
@@ -82,19 +87,12 @@ export function createLinuxSource(): ProcSource {
       } catch {
         continue; // tcp6 absent when IPv6 is disabled
       }
-      // columns: sl local_address rem_address st ... inode; the line is
-      // space-padded, so split the trimmed line on runs of whitespace
-      for (const line of data.split("\n").slice(1)) {
-        const f = line.trim().split(/\s+/);
-        if (f.length < 10 || f[3] !== "0A") continue; // 0A = TCP_LISTEN
-        const port = Number.parseInt(f[1].split(":")[1], 16);
-        if (port) inodeToPort.set(f[9], port);
-      }
+      for (const [inode, port] of parseTcpListen(data))
+        inodeToPort.set(inode, port);
     }
-
-    const ports = new Map<number, number[]>();
     if (!inodeToPort.size) return ports;
-    for (const pid of pids) {
+
+    for (const pid of pidList) {
       let fds: string[];
       try {
         fds = readdirSync(`/proc/${pid}/fd`);
