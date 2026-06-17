@@ -1,10 +1,10 @@
 # cctop - Makefile
 #
-# Thin wrapper over the package.json scripts: every task runs the script of the
+# Thin wrapper over the package.json scripts: each task runs the script of the
 # same name, so `make <task>` and `bun run <task>` are interchangeable. The
 # actual commands live in package.json — edit them there. The one exception is
-# `prep-release`, which is Make-only release tooling. (`install-bin` is named to
-# match its script — a script plainly named `install` would fire on `bun install`.)
+# `prep-release`, Make-only release tooling. (`install-bin` is named to match its
+# script — a script plainly named `install` would fire on `bun install`.)
 
 # Exported so `make install-bin PREFIX=/usr/local` reaches the install-bin script.
 export PREFIX
@@ -12,20 +12,14 @@ VERSION ?= patch
 
 .DEFAULT_GOAL := help
 
-.PHONY: help deps update run dev test build lint clean install-bin uninstall-bin prep-release
+.PHONY: help start dev test build lint clean install-bin uninstall-bin prep-release
 
 help: ## Show available tasks
 	@grep -hE '^[a-z][a-z-]*:.*## .*$$' $(MAKEFILE_LIST) \
 		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
 
-deps: ## Install dependencies (bun install)
-	@bun run deps
-
-update: ## Update dependencies within their ranges (bun update)
-	@bun run update
-
-run: ## Run the interactive TUI (make run ARGS="flux")
-	@bun run run $(ARGS)
+start: ## Run the interactive TUI (make start ARGS="flux")
+	@bun run start $(ARGS)
 
 dev: ## Run with live reload (make dev ARGS="...")
 	@bun run dev $(ARGS)

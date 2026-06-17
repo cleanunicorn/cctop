@@ -7,9 +7,7 @@
     "cctop": "./cctop.ts"
   },
   "scripts": {
-    "deps": "bun install",
-    "update": "bun update",
-    "run": "bun cctop.ts",
+    "start": "bun cctop.ts",
     "dev": "bun --watch cctop.ts",
     "test": "bun test",
     "lint": "bun biome check --write . && bun tsc --noEmit",

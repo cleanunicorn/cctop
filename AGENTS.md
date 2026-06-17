@@ -39,14 +39,12 @@ so `make <x>` and `bun run <x>` are interchangeable. (The one exception is
 its script: a script plainly named `install` would fire on `bun install`.)
 
 ```sh
-make deps       # bun install
-make run        # run the TUI (make run ARGS="flux" to pass a filter)
+make start      # run the TUI (make start ARGS="flux" to pass a filter)
 make dev        # run with --watch live reload
 make lint       # bun biome check --write . && bun tsc --noEmit  (format + lint + types)
 make test       # bun test (the unit suite under test/)
 make build      # compile a standalone binary into bin/
 make clean      # remove bin/ and stray .bun-build files
-make update     # bun update (within semver ranges)
 make install-bin # compile + install onto PATH (override PREFIX=...)
 ```
 
