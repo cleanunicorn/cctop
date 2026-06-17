@@ -30,6 +30,7 @@ import {
   stateWord,
   tildePath,
   truncate,
+  truncateStart,
   truncateStyled,
   visLen,
 } from "./format.ts";
@@ -607,7 +608,9 @@ export function renderDetail(r: Instance, termCols: number): string[] {
   if (r.transcript) {
     // relative to ~/.claude/ — the absolute prefix is just noise in this view
     const log = r.transcript.replace(/^.*\/\.claude\//, "");
-    out.push(`${label("log")}${safe(log)}`);
+    // keep it on one line: the label eats 9 cols, then trim from the left so the
+    // filename (the part that matters) survives and a … leads the dropped prefix
+    out.push(`${label("log")}${truncateStart(safe(log), width - 9)}`);
   }
 
   out.push("");

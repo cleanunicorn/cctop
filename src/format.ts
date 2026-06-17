@@ -140,3 +140,12 @@ export function truncate(s: string, width: number) {
 // escape bytes so the *visible* text is cut to `width` and color codes survive.
 export const truncateStyled = (s: string, width: number) =>
   truncate(s, width + (s.length - visLen(s)));
+
+// Like truncate(), but drops from the *left* and leads with the ellipsis —
+// for paths, where the tail (the filename) matters more than the prefix.
+export function truncateStart(s: string, width: number) {
+  if (s.length <= width) return s;
+  return width <= 1
+    ? s.slice(s.length - width)
+    : `…${s.slice(s.length - width + 1)}`;
+}
