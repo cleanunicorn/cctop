@@ -459,6 +459,10 @@ export function renderDetail(r: Instance, termCols: number): string[] {
   out.push(`${BOLD}Last Prompt${RESET}`);
   out.push(...wrap(safe(r.prompt ?? r.sessionName), 2));
 
+  out.push("");
+  out.push(`${BOLD}Last Turn${RESET}`);
+  out.push(...wrap(safe(r.lastTurn), 2));
+
   if (r.subagents.length) {
     out.push("");
     out.push(`${BOLD}Sub-agents${RESET} ${DIM}(${r.subagents.length})${RESET}`);

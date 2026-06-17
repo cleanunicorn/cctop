@@ -61,6 +61,7 @@ const row = (overrides: Partial<Instance> = {}): Instance => ({
   lastActivity: null,
   lastMs: 0,
   prompt: null,
+  lastTurn: null,
   transcript: null,
   subagents: [],
   children: [],
@@ -389,7 +390,24 @@ describe("transcript file scanning", () => {
       ctx: 1010,
       branch: "feature/parse",
       prompt: "please refactor collect.ts",
+      lastTurn: "on it",
     });
+  });
+
+  test("last turn reports the most recent turn's tool call", async () => {
+    const path = write(
+      "tool-turn.jsonl",
+      jsonl([
+        user("go"),
+        assistant(
+          "claude-sonnet-4",
+          { input_tokens: 5 },
+          [{ type: "tool_use", name: "Edit", input: { file_path: "a/b.ts" } }],
+          { gitBranch: "main" },
+        ),
+      ]),
+    );
+    expect((await __test.transcriptDetails(path)).lastTurn).toBe("Edit: b.ts");
   });
 
   test("skips a half-written final line instead of throwing", async () => {

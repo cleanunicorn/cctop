@@ -39,6 +39,7 @@ export interface Instance {
   lastActivity: string | null;
   lastMs: number;
   prompt: string | null;
+  lastTurn: string | null; // the action the agent's most recent turn took
   transcript: string | null;
   subagents: SubAgent[];
   children: SubProc[];

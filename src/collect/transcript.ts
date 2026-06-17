@@ -8,7 +8,7 @@
 
 import { readdirSync, statSync } from "node:fs";
 import { truncate } from "../format.ts";
-import { contextTokens } from "./entry.ts";
+import { contextTokens, describeAssistant } from "./entry.ts";
 import { projectDir } from "./paths.ts";
 
 // The last prompt is a preview, not a faithful copy (the detail view shows the
@@ -39,11 +39,12 @@ export interface Details {
   model?: string;
   ctx?: number;
   prompt?: string;
+  lastTurn?: string;
 }
 
 // Note what a transcript entry contributes: the newest model + context
-// size (last main-thread assistant turn), git branch, and last user
-// prompt. Returns true once all details are known.
+// size (last main-thread assistant turn), the action that turn took, git
+// branch, and last user prompt. Returns true once all details are known.
 export function noteEntry(details: Details, e: any) {
   details.branch ??= e.gitBranch || undefined;
   // synthetic turns (interrupts, errors, injected notices) carry a
@@ -58,6 +59,9 @@ export function noteEntry(details: Details, e: any) {
   ) {
     details.model = e.message.model;
     details.ctx = contextTokens(e.message.usage);
+    // the action that same (most recent real) turn took: its tool call or a
+    // text snippet; may be null for an empty turn, which leaves it unset
+    details.lastTurn = describeAssistant(e.message) ?? undefined;
   }
   if (!details.prompt && e.type === "user" && !e.isMeta && !e.isSidechain) {
     const c = e.message?.content;

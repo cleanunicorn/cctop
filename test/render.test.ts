@@ -25,6 +25,7 @@ const baseRow = (overrides: Partial<Instance> = {}): Instance => ({
   lastActivity: "2026-06-13T12:00:00.000Z",
   lastMs: Date.now(),
   prompt: "implement tests",
+  lastTurn: "Edit: render.ts",
   transcript: "/Users/alice/.claude/projects/cctop/session-1.jsonl",
   subagents: [],
   children: [],
@@ -112,6 +113,8 @@ describe("render helpers", () => {
     expect(detail).toContain("Sub-processes (11)");
     expect(detail).toContain("Bash: job 12");
     expect(detail).toContain("bash › sleep 11");
+    expect(detail).toContain("Last Turn");
+    expect(detail).toContain("Edit: render.ts");
   });
 
   test("sanitizes untrusted table text while keeping trusted styling", () => {
@@ -163,6 +166,7 @@ describe("render helpers", () => {
       baseRow({
         sessionName: "name\x1b[2J",
         prompt: "prompt\x1b]52;c;secret\x07 text",
+        lastTurn: "Bash\x1b]52;c;secret\x07: ls\x1b[2J",
         transcript: "/tmp/log\x1b[31m.jsonl",
       }),
       80,
@@ -171,6 +175,7 @@ describe("render helpers", () => {
     expect(raw).not.toContain("\x1b]52");
     expect(raw).not.toContain("\x1b[2J");
     expect(stripAnsi(raw)).toContain("prompt text");
+    expect(stripAnsi(raw)).toContain("Bash: ls");
     expect(stripAnsi(raw)).toContain("/tmp/log.jsonl");
   });
 });

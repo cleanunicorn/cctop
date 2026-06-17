@@ -14,6 +14,7 @@
 // the same agents (see attachSubagentsInOrder).
 
 import { statSync } from "node:fs";
+import { describeAssistant } from "./collect/entry.ts";
 import { projectDir } from "./collect/paths.ts";
 import {
   cpuPercent,
@@ -28,7 +29,6 @@ import { readSessions, validSession } from "./collect/sessions.ts";
 import {
   agentContext,
   attachSubagentsInOrder,
-  describeAssistant,
   liveSubagents,
   pruneAgentCache,
 } from "./collect/subagents.ts";
@@ -156,6 +156,7 @@ export async function collectRows(filter: string | null): Promise<Instance[]> {
         lastActivity: lastMs ? new Date(lastMs).toISOString() : null,
         lastMs,
         prompt: details.prompt ?? null,
+        lastTurn: details.lastTurn ?? null,
         transcript: mtimeMs ? transcript : null,
         children: subprocsOf(p.pid, childrenOf, candidatePids)
           .sort((a, b) => b.rss - a.rss || a.pid - b.pid)
