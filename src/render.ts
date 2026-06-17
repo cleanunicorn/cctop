@@ -103,7 +103,17 @@ const subProcCells = (c: SubProc) => ({
   cpu: `${c.cpu.toFixed(1)}%`,
   up: formatDuration(c.uptimeSec),
   name: safe(c.name),
+  ports: c.ports,
 });
+
+// the green " :3000 :8080" tail trailing a sub-process name (a listening server
+// reads as live), or "" when it listens on nothing. Shared by the list tree and
+// the detail view so both render ports identically; the leading two spaces sit
+// outside any surrounding dim so the green stays bright.
+const portTail = (ports: number[]) =>
+  ports.length
+    ? `  ${BRIGHT_GREEN}${ports.map((p) => `:${p}`).join(" ")}${RESET}`
+    : "";
 
 // Paint a session cell: status dot, heat-colored cpu/ctx, dimmed units,
 // dimmed placeholders; everything else as-is.
@@ -306,8 +316,8 @@ export function buildFrame(
   const stateI = cols.findIndex((c) => c.key === "state");
 
   // a sub-process row: a tree branch in the state gutter, then pid/mem/cpu/up
-  // aligned under the session's columns, then the command name; the whole row
-  // is dimmed so sessions stay the focus
+  // aligned under the session's columns, then the command name and any listening
+  // ports; the row (bar the green ports) is dimmed so sessions stay the focus
   const childLine = (c: any, isLast: boolean) => {
     const branch = pad(isLast ? "└─" : "├─", widths[stateI]);
     const stats = TREE_COLS.map((key) => {
@@ -315,8 +325,9 @@ export function buildFrame(
       return pad(c[key], widths[i], cols[i].align === "r");
     }).join("  ");
     const head = `${branch}  ${stats}  `;
-    const room = Math.max(termCols - visLen(head), 8);
-    return `${DIM}${head}${truncate(c.name, room)}${RESET}`;
+    const tail = portTail(c.ports);
+    const room = Math.max(termCols - visLen(head) - visLen(tail), 8);
+    return `${DIM}${head}${truncate(c.name, room)}${RESET}${tail}`;
   };
 
   // a live sub-agent row: branches off the same spine as the processes, but it
@@ -651,13 +662,11 @@ export function renderDetail(r: Instance, termCols: number): string[] {
         true,
       )} ${pad(cell.up, 3, true)}`;
       // listening ports trail the name (green, like a live server); reserve
-      // their width so the name truncates around them rather than over them
-      const ports = c.ports.map((p) => `:${p}`).join(" ");
-      const portTail = ports ? `  ${BRIGHT_GREEN}${ports}${RESET}` : "";
-      const room = Math.max(width - stats.length - 3 - visLen(portTail), 8);
-      out.push(
-        `${DIM}${stats}${RESET}  ${truncate(cell.name, room)}${portTail}`,
-      );
+      // their width (and the 2-space name separator) so the name truncates
+      // around them rather than over them
+      const tail = portTail(c.ports);
+      const room = Math.max(width - stats.length - 2 - visLen(tail), 8);
+      out.push(`${DIM}${stats}${RESET}  ${truncate(cell.name, room)}${tail}`);
     }
   }
   return out;

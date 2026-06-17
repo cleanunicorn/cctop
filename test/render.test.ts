@@ -75,6 +75,8 @@ describe("render helpers", () => {
     expect(text).toContain("cctop");
     expect(text).toContain("implement tests");
     expect(text).toContain("bun test");
+    // the child's listening port shows in the list tree, not only the detail view
+    expect(text).toContain(":5173");
     // connected tree gutter: ● session, then a spine of branches — the
     // sub-agent runs a long arm out to its (markerless) UP column, the lone
     // sub-process closes the spine with └─
