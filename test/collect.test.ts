@@ -749,9 +749,10 @@ describe("host resolution", () => {
 });
 
 // subprocsOf walks a session's children into the sub-process rows shown beneath
-// it: descending through wrapping shells to the real tool command, dropping idle
-// shells, and excluding nested Claude sessions (which get their own top-level
-// row, so their versioned exec name must never appear as a child).
+// it: descending through wrapping shells and build/task runners to the real
+// tool command, dropping idle shells, and excluding nested Claude sessions
+// (which get their own top-level row, so their versioned exec name must never
+// appear as a child).
 describe("sub-process resolution", () => {
   const proc = (over: Partial<Proc>): Proc => ({
     pid: 0,
@@ -831,6 +832,42 @@ describe("sub-process resolution", () => {
     const cands = candidatesOf([session, idleShell, direct]);
     expect(__test.subprocsOf(300, idx, cands).map((p) => p.name)).toEqual([
       "mcp-server",
+    ]);
+  });
+
+  test("descends a build/task runner, keeping it in the chain (make › go)", () => {
+    const session = proc({ pid: 600, name: "claude" });
+    const shell = proc({ pid: 601, ppid: 600, name: "bash" });
+    const make = proc({ pid: 602, ppid: 601, name: "make" });
+    const cmd = proc({ pid: 603, ppid: 602, name: "go" });
+    const idx = childrenOf([session, shell, make, cmd]);
+    const cands = candidatesOf([session, shell, make, cmd]);
+    // the shell collapses to a single prefix, the runner stays in the chain
+    expect(__test.subprocsOf(600, idx, cands).map((p) => p.name)).toEqual([
+      "bash › make › go",
+    ]);
+  });
+
+  test("keeps a childless runner (it is doing the work itself)", () => {
+    const session = proc({ pid: 610, name: "claude" });
+    const shell = proc({ pid: 611, ppid: 610, name: "bash" });
+    const make = proc({ pid: 612, ppid: 611, name: "make" }); // compiling, no child yet
+    const idx = childrenOf([session, shell, make]);
+    const cands = candidatesOf([session, shell, make]);
+    expect(__test.subprocsOf(610, idx, cands).map((p) => p.name)).toEqual([
+      "bash › make",
+    ]);
+  });
+
+  test("collapses a recursive runner into one segment (make › cc)", () => {
+    const session = proc({ pid: 620, name: "claude" });
+    const make = proc({ pid: 621, ppid: 620, name: "make" });
+    const submake = proc({ pid: 622, ppid: 621, name: "make" }); // recursive sub-make
+    const cmd = proc({ pid: 623, ppid: 622, name: "cc" });
+    const idx = childrenOf([session, make, submake, cmd]);
+    const cands = candidatesOf([session, make, submake, cmd]);
+    expect(__test.subprocsOf(620, idx, cands).map((p) => p.name)).toEqual([
+      "make › cc",
     ]);
   });
 
