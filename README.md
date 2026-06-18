@@ -29,7 +29,7 @@ waiting for input.
 
 ## Install
 
-On macOS or Linux, install `cctop` standalone binary with [Homebrew](https://brew.sh):
+On macOS or Linux, install the standalone binary with Homebrew:
 
 ```sh
 brew install stefanprodan/tap/cctop
@@ -38,10 +38,8 @@ brew install stefanprodan/tap/cctop
 Or install it as a script with Bun:
 
 ```sh
-bun install -g github:stefanprodan/cctop#v0.1.0
+bun install -g github:stefanprodan/cctop#v0.2.0
 ```
-
-This puts a `cctop` command in `~/.bun/bin` (add it to your `PATH` with `export PATH="$HOME/.bun/bin:$PATH"`).
 
 ### Usage limits (opt-in)
 
@@ -70,7 +68,7 @@ brew upgrade stefanprodan/tap/cctop
 Or upgrade the scrip to the latest [release](https://github.com/stefanprodan/cctop/releases) with Bun:
 
 ```sh
-bun install -g github:stefanprodan/cctop#v0.1.0
+bun install -g github:stefanprodan/cctop#v0.2.0
 ```
 
 ### Uninstall
