@@ -30,6 +30,7 @@ import {
   stateWord,
   tildePath,
   truncate,
+  truncateStart,
   truncateStyled,
   visLen,
 } from "./format.ts";
@@ -70,7 +71,15 @@ const cols: Col[] = [
 
 // pid/mem/cpu/up are shared between a session and its sub-process rows,
 // so these columns align across both and their widths consider children
-const TREE_COLS = ["pid", "mem", "cpu", "up"];
+const TREE_COLS = ["pid", "mem", "cpu", "up"] as const;
+type TreeCol = (typeof TREE_COLS)[number];
+
+// column key -> its index in `cols`, built once so the per-row renderers don't
+// re-scan with findIndex on every line
+const colIdx: Record<string, number> = {};
+cols.forEach((c, i) => {
+  colIdx[c.key] = i;
+});
 
 // In list view a single session must not crowd the others off-screen, so cap
 // how many sub-agent and sub-process rows it shows; the overflow is summarized
@@ -233,6 +242,9 @@ export function buildFrame(
       activity: a.activity ? safe(a.activity) : null,
     })),
   }));
+  // row types for the per-row renderers below, derived so they track `view`
+  type ChildRow = (typeof view)[number]["children"][number];
+  type AgentRow = (typeof view)[number]["subagents"][number];
 
   // top-style summary: session counts by state, plus the total CPU,
   // memory, and sub-process footprint of Claude (sessions and children)
@@ -288,9 +300,9 @@ export function buildFrame(
       min,
       ...view.map((r) => r.cells[key].length),
     );
-    if (TREE_COLS.includes(key))
+    if ((TREE_COLS as readonly string[]).includes(key))
       for (const r of view)
-        for (const c of r.children) w = Math.max(w, (c as any)[key].length);
+        for (const c of r.children) w = Math.max(w, c[key as TreeCol].length);
     return w;
   });
   // the trailing prompt column absorbs whatever terminal width is left
@@ -316,15 +328,15 @@ export function buildFrame(
       })
       .join("  ");
 
-  const stateI = cols.findIndex((c) => c.key === "state");
+  const stateI = colIdx.state;
 
   // a sub-process row: a tree branch in the state gutter, then pid/mem/cpu/up
   // aligned under the session's columns, then the command name and any listening
   // ports; the row (bar the green ports) is dimmed so sessions stay the focus
-  const childLine = (c: any, isLast: boolean) => {
+  const childLine = (c: ChildRow, isLast: boolean) => {
     const branch = pad(isLast ? "└─" : "├─", widths[stateI]);
     const stats = TREE_COLS.map((key) => {
-      const i = cols.findIndex((col) => col.key === key);
+      const i = colIdx[key];
       return pad(c[key], widths[i], cols[i].align === "r");
     }).join("  ");
     const head = `${branch}  ${stats}  `;
@@ -338,20 +350,20 @@ export function buildFrame(
   // those empty columns out to the UP column, where the agent's own stats begin
   // — all cyan: uptime (from the transcript's creation time), then ctx/model
   // under the parent's columns, with the action flowing free after.
-  const ctxI = cols.findIndex((c) => c.key === "ctx");
-  const modelI = cols.findIndex((c) => c.key === "model");
-  const upI = cols.findIndex((c) => c.key === "up");
+  const ctxI = colIdx.ctx;
+  const modelI = colIdx.model;
+  const upI = colIdx.up;
   // the arm a sub-agent row draws: spans the gutter and the empty pid/mem/cpu
   // columns (with their separators), reaching the UP column where its stats begin
   const agentArmW =
     widths[stateI] +
-    ["pid", "mem", "cpu"].reduce((sum, key) => {
-      const i = cols.findIndex((col) => col.key === key);
-      return sum + 2 + widths[i];
-    }, 0);
+    ["pid", "mem", "cpu"].reduce(
+      (sum, key) => sum + 2 + widths[colIdx[key]],
+      0,
+    );
   const agentArm = (isLast: boolean) =>
     `${isLast ? "└" : "├"}${"─".repeat(Math.max(0, agentArmW - 1))}`;
-  const agentLine = (a: any, isLast: boolean) => {
+  const agentLine = (a: AgentRow, isLast: boolean) => {
     const arm = agentArm(isLast);
     const up = pad(
       a.uptimeSec != null ? formatDuration(a.uptimeSec) : "",
@@ -607,7 +619,9 @@ export function renderDetail(r: Instance, termCols: number): string[] {
   if (r.transcript) {
     // relative to ~/.claude/ — the absolute prefix is just noise in this view
     const log = r.transcript.replace(/^.*\/\.claude\//, "");
-    out.push(`${label("log")}${safe(log)}`);
+    // keep it on one line: the label eats 9 cols, then trim from the left so the
+    // filename (the part that matters) survives and a … leads the dropped prefix
+    out.push(`${label("log")}${truncateStart(safe(log), width - 9)}`);
   }
 
   out.push("");

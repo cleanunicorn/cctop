@@ -39,6 +39,33 @@ const HOST_SKIP = new Set([
 // these to show the real command rather than the shell (see subprocsOf).
 const SHELL_NAMES = new Set(["sh", "bash", "zsh", "fish", "dash", "ksh"]);
 
+// Build/task runners that exec another command to do the real work. Like
+// shells the tree descends through them, but unlike shells each one stays in
+// the chain: `make test` running `go test` shows `bash › make › go`, not just
+// `bash › make`, so the runner and the command it drives are both visible.
+// Unlike an idle shell, a wrapper with nothing under it is still shown — it's
+// doing the work itself (compiling, resolving) between spawning children.
+const WRAPPER_NAMES = new Set([
+  "make",
+  "gmake",
+  "npm",
+  "pnpm",
+  "yarn",
+  "npx",
+  "xargs",
+  "timeout",
+  "time",
+  "watch",
+]);
+
+// Join a command onto the running prefix, collapsing a consecutive duplicate
+// (recursive `make › make`, or `npm › npm`) into a single segment.
+const appendSegment = (prefix: string | null, name: string): string => {
+  if (!prefix) return name;
+  if (prefix === name || prefix.endsWith(` › ${name}`)) return prefix;
+  return `${prefix} › ${name}`;
+};
+
 export function hostApp(proc: Proc, byPid: Map<number, Proc>): string {
   let p: Proc | undefined = proc;
   for (let i = 0; i < 20; i++) {
@@ -70,12 +97,15 @@ export function indexChildren(procs: Proc[]): Map<number, Proc[]> {
   return childrenOf;
 }
 
-// A session's effective sub-processes: descend through shells running tool
-// commands (claude's Bash tool spawns `bash -c '...'`, occasionally nested)
-// down to the real command, keeping the outermost shell as a single prefix
-// so context is preserved without piling up layers ("bash › go", not
-// "bash › bash › go"). A shell with nothing under it is just an idle
-// wrapper between commands and is dropped. The depth cap guards cycles.
+// A session's effective sub-processes: descend through shells and build/task
+// runners (claude's Bash tool spawns `bash -c '...'`, occasionally nested)
+// down to the real command. Repeated shells collapse to a single outermost
+// prefix so context is preserved without piling up layers ("bash › go", not
+// "bash › bash › go"); a wrapper instead stays in the chain ("bash › make › go")
+// since the runner and the command it drives are both informative. A shell
+// with nothing under it is just an idle wrapper between commands and is
+// dropped; a childless runner is kept (it's working itself). The depth cap
+// guards cycles.
 function resolveProc(
   proc: Proc,
   prefix: string | null,
@@ -93,15 +123,19 @@ function resolveProc(
   // excluded too — otherwise they would still double-list.
   if (candidatePids.has(proc.pid)) return [];
   const kids = childrenOf.get(proc.pid) ?? [];
-  if (depth < 8 && SHELL_NAMES.has(proc.name) && kids.length) {
-    const label = prefix ?? proc.name;
+  const isShell = SHELL_NAMES.has(proc.name);
+  const isWrapper = WRAPPER_NAMES.has(proc.name);
+  if (depth < 8 && kids.length && (isShell || isWrapper)) {
+    // shells collapse onto the outermost prefix; wrappers extend the chain
+    const label = isShell
+      ? (prefix ?? proc.name)
+      : appendSegment(prefix, proc.name);
     return kids.flatMap((k) =>
       resolveProc(k, label, depth + 1, childrenOf, candidatePids),
     );
   }
-  if (SHELL_NAMES.has(proc.name)) return []; // childless shell, skip
-  const name = prefix ? `${prefix} › ${proc.name}` : proc.name;
-  return [{ ...proc, name }];
+  if (isShell) return []; // childless shell, just an idle wrapper — skip
+  return [{ ...proc, name: appendSegment(prefix, proc.name) }];
 }
 
 export function subprocsOf(
