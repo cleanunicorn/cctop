@@ -22,19 +22,20 @@ waiting for input.
 - **Weekly usage limits** *(opt-in)* — show your Claude subscription's 5h/7d
   rate-limit usage in the summary line.
 - **Quit a runaway session** in place (`x` → `SIGTERM`, with confirm).
-- **Read-only and local** — reads only `~/.claude` and the process table,
+- **Read-only and local** — the TUI reads only `~/.claude` and the process table,
   spawns no processes.
 - **Zero dependencies** — a single Bun program with no npm packages;
   it uses only the Bun runtime and OS built-ins.
 
-## Requirements
-
-- [Bun](https://bun.sh) 1.3 or newer
-- macOS or Linux
-
 ## Install
 
-Install `cctop` globally with:
+On macOS or Linux, install `cctop` standalone binary with [Homebrew](https://brew.sh):
+
+```sh
+brew install stefanprodan/tap/cctop
+```
+
+Or install it as a script with Bun:
 
 ```sh
 bun install -g github:stefanprodan/cctop#v0.1.0
@@ -42,30 +43,7 @@ bun install -g github:stefanprodan/cctop#v0.1.0
 
 This puts a `cctop` command in `~/.bun/bin` (add it to your `PATH` with `export PATH="$HOME/.bun/bin:$PATH"`).
 
-Prefer not to install Bun? Each [release](https://github.com/stefanprodan/cctop/releases)
-ships standalone binaries for macOS and Linux (`amd64`/`arm64`). Download cctop and install with:
-
-```sh
-# macOS arm64 — swap darwin_arm64 for darwin_amd64 / linux_amd64 / linux_arm64
-curl -fsSL https://github.com/stefanprodan/cctop/releases/latest/download/cctop_darwin_arm64.tar.gz | tar xz
-install -m 0755 cctop /usr/local/bin/cctop
-```
-
-### Update
-
-Upgrade by installing the latest [release](https://github.com/stefanprodan/cctop/releases) tag:
-
-```sh
-bun install -g github:stefanprodan/cctop#v0.1.0
-```
-
-### Uninstall
-
-```sh
-bun uninstall -g cctop
-```
-
-## Usage limits (opt-in)
+### Usage limits (opt-in)
 
 To display the subscription's rate-limit usage, add the following to
 your Claude Code [status-line](https://code.claude.com/docs/en/statusline) script:
@@ -80,6 +58,37 @@ printf '%s' "$input" | cctop --capture-usage || true
 With `--capture-usage` the rate limits stats are persisted to
 `~/.claude/cctop/usage.json` from which the cctop TUI reads.
 See [docs/usage-limits.md](docs/usage-limits.md) for more details.
+
+### Update
+
+With Homebrew:
+
+```sh
+brew upgrade stefanprodan/tap/cctop
+```
+
+Or upgrade the scrip to the latest [release](https://github.com/stefanprodan/cctop/releases) with Bun:
+
+```sh
+bun install -g github:stefanprodan/cctop#v0.1.0
+```
+
+### Uninstall
+
+With Homebrew:
+
+```sh
+brew uninstall stefanprodan/tap/cctop
+```
+
+Or with Bun:
+
+```sh
+bun uninstall -g cctop
+```
+
+If you enabled usage limits, also remove the `cctop --capture-usage` line from
+your Claude Code status-line script.
 
 ## Usage
 
