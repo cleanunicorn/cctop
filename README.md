@@ -21,7 +21,9 @@ waiting for input.
   heat toward red as they climb; the selected session is marked with a blue bar.
 - **Weekly usage limits** *(opt-in)* — show your Claude subscription's 5h/7d
   rate-limit usage in the summary line.
-- **Quit a runaway session** in place (`x` → `SIGTERM`, with confirm).
+- **Quit a runaway session** in place (`x` → `SIGTERM`, with confirm), or
+  **free ports** held by a session's leftover dev server
+  (`f` in the detail view).
 - **Read-only and local** — the TUI reads only `~/.claude` and the process table,
   spawns no processes.
 - **Zero dependencies** — a single Bun program with no npm packages;
@@ -97,18 +99,19 @@ redirected, or run with `--once` it prints a single frame and exits.
 
 While the TUI is running:
 
-| Key             | Action                                              |
-|-----------------|-----------------------------------------------------|
-| `↑`/`k` `↓`/`j` | move the selection                                  |
-| `PgUp`/`PgDn`   | jump 10 rows                                        |
-| `g` / `G`       | jump to top / bottom                                |
-| `enter`         | open the detail view for the selected session       |
-| `esc`           | leave the detail view / close an overlay            |
-| `/`             | filter sessions (type, `enter` to apply)            |
-| `s`             | cycle the sort column (default, cpu, mem, ctx, pid) |
-| `x`             | quit the selected session (`SIGTERM`, with confirm) |
-| `?`             | toggle the help overlay                             |
-| `q` / `Ctrl-C`  | quit cctop                                          |
+| Key             | Action                                                           |
+|-----------------|------------------------------------------------------------------|
+| `↑`/`k` `↓`/`j` | move the selection                                               |
+| `PgUp`/`PgDn`   | jump 10 rows                                                     |
+| `g` / `G`       | jump to top / bottom                                             |
+| `enter`         | open the detail view for the selected session                    |
+| `esc`           | leave the detail view / close an overlay                         |
+| `/`             | filter sessions (type, `enter` to apply)                         |
+| `s`             | cycle the sort column (default, cpu, mem, ctx, pid)              |
+| `x`             | quit the selected session (`SIGTERM`, with confirm)              |
+| `f`             | reclaim the detail view's orphan ports (`SIGTERM`, with confirm) |
+| `?`             | toggle the help overlay                                          |
+| `q` / `Ctrl-C`  | quit cctop                                                       |
 
 ### Options
 

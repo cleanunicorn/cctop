@@ -18,7 +18,8 @@ exits, while `--json` prints one JSON snapshot and exits.
   never mutates any session, registry, or transcript. Its one write is its own
   usage cache (`~/.claude/cctop/usage.json`), and only under `--capture-usage`;
   the only thing it ever does to another process is send a signal, and only on an
-  explicit user action (`x` → SIGTERM). Preserve this property.
+  explicit user action (`x` → SIGTERM a session; `f` → SIGTERM a session's
+  orphaned dev-server processes to free their ports). Preserve this property.
 - **Zero runtime dependencies.** cctop imports only Bun and OS built-ins
   (`bun:ffi`, `node:fs`, …); `package.json` has no `dependencies` field (the
   devDependencies are just Biome/tsc/types). Do not add npm packages — keep it
@@ -132,7 +133,10 @@ the source in `collect/process-tree.ts` (`hostApp`, `HOST_SKIP`, `isClaudeProc`)
 
 6. **Actions are guarded.** Only act on real session rows (they have a pid);
    never sub-process/sub-agent rows. `process.kill` errors (ESRCH/EPERM) must go
-   to the status line, never crash. Quitting is confirm-gated.
+   to the status line, never crash. Quitting (`x`) and freeing orphan ports
+   (`f`, detail view) are both confirm-gated, and both re-collect before
+   signalling so a recycled pid is never hit — `f` signals the freshly
+   re-validated orphan pids, not the ones captured when the confirm opened.
 
 ## Conventions
 
