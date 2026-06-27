@@ -34,10 +34,12 @@ import { buildFrame, type Group, renderDetail, rowKey } from "./render.ts";
 
 type Mode = "list" | "detail" | "filter" | "confirm" | "help";
 
-interface ConfirmAction {
-  row: Instance;
-  signal: "SIGTERM";
-}
+// A pending destructive action awaiting y/n. "quit" signals the session pid;
+// "free" signals the session's orphaned dev-server processes to release their
+// ports. Both are SIGTERM and both are confirm-gated.
+type ConfirmAction =
+  | { kind: "quit"; row: Instance; signal: "SIGTERM" }
+  | { kind: "free"; row: Instance };
 
 interface State {
   rows: Instance[]; // all sessions, unfiltered, sorted by collectRows default
@@ -211,7 +213,7 @@ export async function runApp(opts: AppOptions): Promise<void> {
   const sameSignalTarget = (a: Instance, b: Instance) =>
     a.pid === b.pid && rowKey(a) === rowKey(b) && a.startSec === b.startSec;
 
-  const doQuit = async (action: ConfirmAction) => {
+  const doQuit = async (action: Extract<ConfirmAction, { kind: "quit" }>) => {
     const { row, signal } = action;
     let rows: Instance[];
     try {
@@ -245,6 +247,55 @@ export async function runApp(opts: AppOptions): Promise<void> {
             : sanitizeDisplay(e?.message ?? "failed");
       flash(`could not signal ${current.pid}: ${why}`, RED);
     }
+  };
+
+  // Free a session's orphaned dev-server ports by SIGTERM-ing the processes
+  // holding them. Re-collect first so we signal freshly re-validated orphan
+  // pids (orphan detection re-runs every collect), never a stale or recycled
+  // one captured when the confirm opened.
+  const doFree = async (action: Extract<ConfirmAction, { kind: "free" }>) => {
+    let rows: Instance[];
+    try {
+      rows = await collectRows(null);
+    } catch (e: any) {
+      flash(
+        `could not refresh sessions: ${sanitizeDisplay(e?.message ?? "failed")}`,
+        RED,
+      );
+      return;
+    }
+    state.rows = rows;
+    const current = rows.find((r) => sameSignalTarget(r, action.row));
+    const orphans = current?.orphanPorts ?? [];
+    if (!orphans.length) {
+      flash("no orphan ports left to free", YELLOW);
+      return;
+    }
+    let freedPorts = 0;
+    const failed: string[] = [];
+    for (const o of orphans) {
+      try {
+        process.kill(o.pid, "SIGTERM");
+        freedPorts += o.ports.length;
+      } catch (e: any) {
+        const why =
+          e?.code === "ESRCH"
+            ? "gone"
+            : e?.code === "EPERM"
+              ? "denied"
+              : sanitizeDisplay(e?.code ?? "failed");
+        failed.push(`${o.pid} ${why}`);
+      }
+    }
+    const ports = (n: number) => `${n} orphan port${n === 1 ? "" : "s"}`;
+    if (freedPorts && !failed.length)
+      flash(`freed ${ports(freedPorts)} (SIGTERM)`, GREEN);
+    else if (freedPorts)
+      flash(
+        `freed ${ports(freedPorts)}, ${failed.length} failed: ${failed.join(", ")}`,
+        YELLOW,
+      );
+    else flash(`could not free orphan ports: ${failed.join(", ")}`, RED);
   };
 
   // --- input ---------------------------------------------------------------
@@ -289,7 +340,7 @@ export async function runApp(opts: AppOptions): Promise<void> {
       case "x": {
         const row = selectedRow(displayRows());
         if (row) {
-          state.confirm = { row, signal: "SIGTERM" };
+          state.confirm = { kind: "quit", row, signal: "SIGTERM" };
           state.mode = "confirm";
         }
         break;
@@ -323,8 +374,19 @@ export async function runApp(opts: AppOptions): Promise<void> {
       case "x": {
         const row = selectedRow(displayRows());
         if (row) {
-          state.confirm = { row, signal: "SIGTERM" };
+          state.confirm = { kind: "quit", row, signal: "SIGTERM" };
           state.mode = "confirm";
+        }
+        break;
+      }
+      case "f": {
+        // free the orphaned dev-server ports shown in this detail view
+        const row = selectedRow(displayRows());
+        if (row?.orphanPorts.length) {
+          state.confirm = { kind: "free", row };
+          state.mode = "confirm";
+        } else if (row) {
+          flash("no orphan ports to free");
         }
         break;
       }
@@ -356,11 +418,15 @@ export async function runApp(opts: AppOptions): Promise<void> {
     if (k === "y" || k === "Y") {
       const action = state.confirm;
       state.confirm = null;
-      state.mode = "list";
-      if (action) await doQuit(action);
+      // freeing leaves the session alive, so return to its detail view; a quit
+      // removes it, so fall back to the list
+      state.mode = action?.kind === "free" ? "detail" : "list";
+      if (action?.kind === "quit") await doQuit(action);
+      else if (action?.kind === "free") await doFree(action);
     } else if (k === "n" || k === "N" || k === "escape" || k === "q") {
+      // back to wherever the confirm was raised from
+      state.mode = state.confirm?.kind === "free" ? "detail" : "list";
       state.confirm = null;
-      state.mode = "list";
     }
     draw();
   };
@@ -670,6 +736,7 @@ export async function runApp(opts: AppOptions): Promise<void> {
       "",
       b("Actions"),
       key("x", "quit selected session (SIGTERM, confirm)"),
+      key("f", "free orphan ports in detail view (SIGTERM, confirm)"),
       "",
       b("Exit"),
       key("q / Ctrl-C", "quit cctop"),
@@ -718,12 +785,18 @@ export async function runApp(opts: AppOptions): Promise<void> {
       );
     }
     if (state.mode === "confirm" && state.confirm) {
-      const { row, signal } = state.confirm;
+      const { row } = state.confirm;
+      const project = sanitizeDisplay(shortProject(row.project));
+      const yn = `${BOLD}${GREEN}y${RESET}es / ${BOLD}${RED}n${RESET}o`;
+      if (state.confirm.kind === "free") {
+        const n = row.orphanPorts.reduce((s, o) => s + o.ports.length, 0);
+        const ports = `${n} orphan port${n === 1 ? "" : "s"}`;
+        return `${YELLOW}Free ${ports} of ${project} with SIGTERM?${RESET}  ${yn}`;
+      }
       const id = sanitizeDisplay(
         row.sessionId ? row.sessionId.slice(0, 8) : `pid ${row.pid}`,
       );
-      const project = sanitizeDisplay(shortProject(row.project));
-      return `${YELLOW}Quit ${project} (${id}) with ${signal}?${RESET}  ${BOLD}${GREEN}y${RESET}es / ${BOLD}${RED}n${RESET}o`;
+      return `${YELLOW}Quit ${project} (${id}) with ${state.confirm.signal}?${RESET}  ${yn}`;
     }
     if (state.message) {
       return `${state.messageColor}${state.message}${RESET}`;
@@ -731,7 +804,7 @@ export async function runApp(opts: AppOptions): Promise<void> {
     const sort = SORTS[state.sortIndex].name;
     const hint =
       state.mode === "detail"
-        ? "↑↓ scroll · esc back · x quit session · q exit"
+        ? "↑↓ scroll · esc back · x quit · f free ports · q exit"
         : `↑↓ move · enter detail · / filter · s sort:${sort} · x quit · ? help · q exit`;
     const left = `${DIM}cctop/${opts.version} · every ${opts.watchSecs}s · ${clockTime()}${RESET}`;
     const line = `${left}  ${DIM}·${RESET}  ${DIM}${hint}${RESET}`;
