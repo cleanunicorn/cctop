@@ -632,17 +632,28 @@ export async function runApp(opts: AppOptions): Promise<void> {
     );
 
     if (!rows.length) {
+      // No table to show, so drop the column header (it would dangle over
+      // nothing) and place a friendly two-line note centered in the empty
+      // region instead of a lone left-aligned message above a wall of blank.
       const filter = activeFilter();
-      const msg = filter
-        ? `no Claude Code sessions match "${sanitizeDisplay(filter)}"`
-        : "no Claude Code sessions running";
-      const body = [`${DIM}${msg}${RESET}`, ...Array(region - 1).fill("")];
-      return [
-        ...top,
-        GUTTER + headerOnly(cols),
-        ...body.slice(0, region),
-        footer,
-      ];
+      const note = filter
+        ? [
+            `${DIM}No sessions match${RESET}  ${BOLD}${sanitizeDisplay(filter)}${RESET}`,
+            `${DIM}Press${RESET} ${CYAN}/${RESET} ${DIM}to change the filter${RESET}`,
+          ]
+        : [
+            `${DIM}No Claude Code sessions running${RESET}`,
+            `${DIM}Start one with${RESET} ${CYAN}claude${RESET} ${DIM}and it shows up here${RESET}`,
+          ];
+      // no header line here, so reclaim it (region reserved one) and center the
+      // note vertically in the whole area, padding out so the footer stays put
+      const area = region + 1;
+      const body: string[] = [];
+      const padTop = Math.max(0, Math.floor((area - note.length) / 2));
+      for (let i = 0; i < padTop; i++) body.push("");
+      for (const l of note) body.push(center(l, cols));
+      while (body.length < area) body.push("");
+      return [...top, ...body.slice(0, area), footer];
     }
 
     const frame = buildFrame(
@@ -772,10 +783,6 @@ export async function runApp(opts: AppOptions): Promise<void> {
     ).summary;
   }
 
-  function headerOnly(cols: number): string {
-    return buildFrame([], cols - GUTTER.length).header;
-  }
-
   function footerLine(cols: number): string {
     if (state.mode === "filter") {
       const cursor = `${CYAN}▏${RESET}`;
@@ -830,4 +837,11 @@ export async function runApp(opts: AppOptions): Promise<void> {
 // Truncate a plain (no-ANSI) string to a visible width with an ellipsis.
 function truncateVisible(s: string, width: number): string {
   return s.length <= width ? s : truncate(s, width);
+}
+
+// Pad a (possibly ANSI-styled) string with leading spaces so its visible text
+// sits centered in `width` columns. Used for the empty-state note.
+function center(s: string, width: number): string {
+  const left = Math.max(0, Math.floor((width - visLen(s)) / 2));
+  return " ".repeat(left) + s;
 }
