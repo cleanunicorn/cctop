@@ -33,6 +33,7 @@ import {
   truncateStart,
   truncateStyled,
   visLen,
+  YELLOW,
 } from "./format.ts";
 
 // A stable identity for a session row that survives re-sorting across
@@ -433,6 +434,29 @@ export function buildFrame(
 
 // --- Detail view -----------------------------------------------------------
 
+export interface DetailResolution {
+  row: Instance | null; // the session to render, or null when there is none
+  ended: boolean; // its session has exited; `row` is the frozen last snapshot
+}
+
+// Decide which session the detail view shows and whether it has ended. A live
+// match (by key) tracks fresh; once the pinned session leaves `rows`, the prior
+// snapshot is returned frozen (ended=true) so the panel keeps its last-known
+// data instead of swapping to a neighbor. Pid-keyed rows (registry-less) can
+// collide with a recycled pid, so a live match must also share the snapshot's
+// startSec to count as the same session. Pure, so the freeze logic is testable.
+export function resolveDetail(
+  rows: Instance[],
+  key: string | null,
+  prev: Instance | null,
+): DetailResolution {
+  const live = key != null ? rows.find((r) => rowKey(r) === key) : undefined;
+  if (live && (!prev || live.startSec === prev.startSec))
+    return { row: live, ended: false };
+  if (prev) return { row: prev, ended: true };
+  return { row: null, ended: false };
+}
+
 const label = (s: string) => `${DIM}${pad(s, 9)}${RESET}`;
 
 // A styled span of text: the visible string plus the ANSI prefix to wrap it in
@@ -527,8 +551,13 @@ function plainWords(text: string): MdWord[] {
 }
 
 // A full-screen panel for one session: everything the row truncates, shown
-// in full. Returns the body lines (caller adds title/footer chrome).
-export function renderDetail(r: Instance, termCols: number): string[] {
+// in full. Returns the body lines (caller adds title/footer chrome). `ended`
+// swaps the live status dot/word for an "ended" marker over the frozen snapshot.
+export function renderDetail(
+  r: Instance,
+  termCols: number,
+  ended = false,
+): string[] {
   const width = Math.max(termCols, 20);
 
   // A free-text block (last prompt/turn): wrap styled words to the body width,
@@ -586,14 +615,21 @@ export function renderDetail(r: Instance, termCols: number): string[] {
   const agoSuffix = (ms: number | null) =>
     ms ? `  ${DIM}${formatDuration((Date.now() - ms) / 1000)} ago${RESET}` : "";
 
-  const dot = stateDot(r.state);
+  // ended: a hollow dim dot (no live signal) + a yellow badge, so the frozen
+  // panel reads as stopped, not broken
+  const dot = ended ? `${DIM}○${RESET}` : stateDot(r.state);
   const out: string[] = [];
   const projectShort = safe(shortProject(r.project), "?");
-  out.push(`${dot} ${BOLD}${projectShort}${RESET}`);
+  out.push(
+    `${dot} ${BOLD}${projectShort}${RESET}` +
+      (ended ? `  ${YELLOW}session ended${RESET}` : ""),
+  );
   out.push("");
   out.push(`${label("session")}${safe(r.sessionId)}`);
   out.push(`${label("uptime")}${formatDuration(r.uptimeSec)}`);
-  out.push(`${label("state")}${stateWord(safe(r.state))}`);
+  out.push(
+    `${label("state")}${ended ? `${YELLOW}ended${RESET}` : stateWord(safe(r.state))}`,
+  );
   out.push(`${label("pid")}${r.pid}  ${DIM}·${RESET}  ${safe(r.kind)}`);
   const cpuC = cpuColor(r.cpu);
   const cpuStr = `${r.cpu.toFixed(1)}%`;

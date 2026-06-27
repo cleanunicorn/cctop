@@ -27,10 +27,17 @@ import {
   sanitizeDisplay,
   shortProject,
   truncate,
+  truncateStyled,
   visLen,
   YELLOW,
 } from "./format.ts";
-import { buildFrame, type Group, renderDetail, rowKey } from "./render.ts";
+import {
+  buildFrame,
+  type Group,
+  renderDetail,
+  resolveDetail,
+  rowKey,
+} from "./render.ts";
 
 type Mode = "list" | "detail" | "filter" | "confirm" | "help";
 
@@ -53,6 +60,8 @@ interface State {
   sortIndex: number;
   scrollTop: number; // first visible group index (list)
   detailScroll: number; // first visible line (detail)
+  detailRow: Instance | null; // last-known snapshot of the session in detail view
+  detailEnded: boolean; // that session has disappeared from the live set
   message: string | null;
   messageColor: string;
   messageUntil: number;
@@ -109,6 +118,8 @@ export async function runApp(opts: AppOptions): Promise<void> {
     sortIndex: 0,
     scrollTop: 0,
     detailScroll: 0,
+    detailRow: null,
+    detailEnded: false,
     message: null,
     messageColor: DIM,
     messageUntil: 0,
@@ -153,6 +164,18 @@ export async function runApp(opts: AppOptions): Promise<void> {
     return i >= 0
       ? rows[i]
       : rows[Math.min(state.selectedIndex, rows.length - 1)];
+  };
+
+  // The live row for the session open in detail, or null once it has ended (or a
+  // recycled pid took its key). x/f target this, so they never hit the wrong
+  // process. Resolved against the snapshot so resolveDetail's startSec check runs.
+  const detailTarget = (): Instance | null => {
+    const { row, ended } = resolveDetail(
+      state.rows,
+      state.selectedKey,
+      state.detailRow,
+    );
+    return ended ? null : row;
   };
 
   // After data/filter/sort changes, keep the cursor on the same session if it
@@ -205,7 +228,9 @@ export async function runApp(opts: AppOptions): Promise<void> {
     } finally {
       refreshing = false;
     }
-    reconcile(displayRows());
+    // listScreen re-validates the cursor (the only surface that shows it), so a
+    // session ending while the user sits in detail or a confirm never moves the
+    // pinned selection. Just repaint.
     draw();
   };
 
@@ -323,12 +348,16 @@ export async function runApp(opts: AppOptions): Promise<void> {
       case "end":
         jump("bottom");
         break;
-      case "enter":
-        if (selectedRow(displayRows())) {
+      case "enter": {
+        const row = selectedRow(displayRows());
+        if (row) {
           state.mode = "detail";
           state.detailScroll = 0;
+          state.detailRow = row;
+          state.detailEnded = false;
         }
         break;
+      }
       case "/":
         state.mode = "filter";
         state.filterInput = state.filter ?? "";
@@ -372,20 +401,24 @@ export async function runApp(opts: AppOptions): Promise<void> {
         state.detailScroll += 10;
         break;
       case "x": {
-        const row = selectedRow(displayRows());
+        const row = detailTarget();
         if (row) {
           state.confirm = { kind: "quit", row, signal: "SIGTERM" };
           state.mode = "confirm";
+        } else {
+          flash("session has ended");
         }
         break;
       }
       case "f": {
         // free the orphaned dev-server ports shown in this detail view
-        const row = selectedRow(displayRows());
-        if (row?.orphanPorts.length) {
+        const row = detailTarget();
+        if (!row) {
+          flash("session has ended");
+        } else if (row.orphanPorts.length) {
           state.confirm = { kind: "free", row };
           state.mode = "confirm";
-        } else if (row) {
+        } else {
           flash("no orphan ports to free");
         }
         break;
@@ -624,6 +657,12 @@ export async function runApp(opts: AppOptions): Promise<void> {
 
   function listScreen(cols: number, termRows: number): string[] {
     const rows = displayRows();
+    // Keep the cursor on a live row while the list is the active surface, so the
+    // highlight and the action target agree (even just back from an ended detail
+    // view). Skip during a confirm: it anchors a specific session, and a refresh
+    // mid-dialog must not retarget it (esp. the free-ports confirm, which returns
+    // to the frozen detail view, not the list).
+    if (state.mode !== "confirm") reconcile(rows);
     const top = [...summaryLines(rows).map((l) => GUTTER + l), ""];
     const footer = GUTTER + footerLine(cols - GUTTER.length);
     const region = Math.max(
@@ -632,9 +671,8 @@ export async function runApp(opts: AppOptions): Promise<void> {
     );
 
     if (!rows.length) {
-      // No table to show, so drop the column header (it would dangle over
-      // nothing) and place a friendly two-line note centered in the empty
-      // region instead of a lone left-aligned message above a wall of blank.
+      // No table, so drop the dangling column header and center a two-line note
+      // in the empty region instead of a lone left-aligned line above blank.
       const filter = activeFilter();
       const note = filter
         ? [
@@ -645,13 +683,13 @@ export async function runApp(opts: AppOptions): Promise<void> {
             `${DIM}No Claude Code sessions running${RESET}`,
             `${DIM}Start one with${RESET} ${CYAN}claude${RESET} ${DIM}and it shows up here${RESET}`,
           ];
-      // no header line here, so reclaim it (region reserved one) and center the
-      // note vertically in the whole area, padding out so the footer stays put
+      // reclaim the reserved header line, center vertically, pad so the footer pins
       const area = region + 1;
       const body: string[] = [];
       const padTop = Math.max(0, Math.floor((area - note.length) / 2));
       for (let i = 0; i < padTop; i++) body.push("");
-      for (const l of note) body.push(center(l, cols));
+      // clip first so a narrow terminal can't wrap a line and shove the footer down
+      for (const l of note) body.push(center(truncateStyled(l, cols), cols));
       while (body.length < area) body.push("");
       return [...top, ...body.slice(0, area), footer];
     }
@@ -711,15 +749,23 @@ export async function runApp(opts: AppOptions): Promise<void> {
   }
 
   function detailScreen(cols: number, termRows: number): string[] {
-    const rows = displayRows();
-    const row = selectedRow(rows);
+    // Track the snapshot by its pinned key while live; once the session leaves
+    // the table, freeze it (ended) rather than swapping to a neighbor, so the
+    // user stays on the session they opened with its last prompt/turn/stats.
+    const { row, ended } = resolveDetail(
+      state.rows,
+      state.selectedKey,
+      state.detailRow,
+    );
     if (!row) {
       state.mode = "list";
       return listScreen(cols, termRows);
     }
+    state.detailRow = row;
+    state.detailEnded = ended;
     const footer = GUTTER + footerLine(cols - GUTTER.length);
     const region = Math.max(termRows - 1, 1);
-    const body = renderDetail(row, cols - 2).map((l) => `  ${l}`);
+    const body = renderDetail(row, cols - 2, ended).map((l) => `  ${l}`);
     const clipped = clipLines(body, region, state.detailScroll);
     state.detailScroll = clipped.scroll;
     return [...clipped.lines, footer];
@@ -811,7 +857,10 @@ export async function runApp(opts: AppOptions): Promise<void> {
     const sort = SORTS[state.sortIndex].name;
     const hint =
       state.mode === "detail"
-        ? "↑↓ scroll · esc back · x quit · f free ports · q exit"
+        ? // x/f no-op on an ended session, so drop them from the hint and say why
+          state.detailEnded
+          ? "session ended · ↑↓ scroll · esc back · q exit"
+          : "↑↓ scroll · esc back · x quit · f free ports · q exit"
         : `↑↓ move · enter detail · / filter · s sort:${sort} · x quit · ? help · q exit`;
     const left = `${DIM}cctop/${opts.version} · every ${opts.watchSecs}s · ${clockTime()}${RESET}`;
     const line = `${left}  ${DIM}·${RESET}  ${DIM}${hint}${RESET}`;
@@ -839,8 +888,7 @@ function truncateVisible(s: string, width: number): string {
   return s.length <= width ? s : truncate(s, width);
 }
 
-// Pad a (possibly ANSI-styled) string with leading spaces so its visible text
-// sits centered in `width` columns. Used for the empty-state note.
+// Left-pad an (ANSI-styled) string so its visible text is centered in `width`.
 function center(s: string, width: number): string {
   const left = Math.max(0, Math.floor((width - visLen(s)) / 2));
   return " ".repeat(left) + s;

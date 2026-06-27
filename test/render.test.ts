@@ -4,7 +4,13 @@
 import { describe, expect, test } from "bun:test";
 import type { Instance, Usage } from "../src/collect.ts";
 import { BLUE, BOLD, RED, RESET, stripAnsi, YELLOW } from "../src/format.ts";
-import { buildFrame, renderDetail, rowKey, usageLine } from "../src/render.ts";
+import {
+  buildFrame,
+  renderDetail,
+  resolveDetail,
+  rowKey,
+  usageLine,
+} from "../src/render.ts";
 
 const baseRow = (overrides: Partial<Instance> = {}): Instance => ({
   pid: 12345,
@@ -268,6 +274,73 @@ describe("render helpers", () => {
     );
     expect(active).not.toContain("new session");
     expect(active).toContain("Last Turn");
+  });
+
+  test("resolveDetail tracks the live row, then freezes it when it ends", () => {
+    const a = baseRow({ sessionId: "a", cpu: 1 });
+    const b = baseRow({ sessionId: "b", cpu: 2 });
+
+    // live: returns the fresh row by key (not a stale snapshot), ended=false
+    const stale = baseRow({ sessionId: "a", cpu: 99 });
+    const live = resolveDetail([a, b], "a", stale);
+    expect(live.row).toBe(a);
+    expect(live.ended).toBe(false);
+
+    // gone: the pinned session vanished — freeze the prior snapshot, ended=true,
+    // and never fall back to a surviving neighbor (b)
+    const gone = resolveDetail([b], "a", stale);
+    expect(gone.row).toBe(stale);
+    expect(gone.ended).toBe(true);
+
+    // no snapshot and no live match: nothing to show
+    const empty = resolveDetail([b], "a", null);
+    expect(empty.row).toBeNull();
+    expect(empty.ended).toBe(false);
+
+    // null key (no selection): only a snapshot can be shown, and only as ended
+    expect(resolveDetail([a], null, null).row).toBeNull();
+    expect(resolveDetail([a], null, stale)).toEqual({
+      row: stale,
+      ended: true,
+    });
+
+    // recycled pid: a registry-less row is keyed by pid, so a different process
+    // can reuse the pinned key. A live match whose start time differs from the
+    // snapshot is an impostor — report ended (frozen), never adopt it.
+    const oldProc = baseRow({ sessionId: null, pid: 999, startSec: 100 });
+    const recycled = baseRow({ sessionId: null, pid: 999, startSec: 200 });
+    expect(rowKey(oldProc)).toBe(rowKey(recycled)); // same key, different process
+    const impostor = resolveDetail([recycled], "pid:999", oldProc);
+    expect(impostor.row).toBe(oldProc);
+    expect(impostor.ended).toBe(true);
+    // same pid AND same start time is the genuine session — tracked live
+    const same = baseRow({ sessionId: null, pid: 999, startSec: 100 });
+    expect(resolveDetail([same], "pid:999", oldProc)).toEqual({
+      row: same,
+      ended: false,
+    });
+  });
+
+  test("marks an ended session but keeps its last snapshot", () => {
+    const row = baseRow({ state: "busy", prompt: "fix the parser" });
+    // when ended, the panel is frozen: status reads "ended", but every other
+    // field (last prompt, model, context, …) still shows the last snapshot
+    const ended = stripAnsi(renderDetail(row, 120, true).join("\n"));
+    expect(ended).toContain("session ended");
+    expect(ended).toMatch(/state\s+ended/);
+    expect(ended).not.toMatch(/state\s+busy/);
+    expect(ended).toContain("fix the parser"); // last prompt preserved
+    expect(ended).toContain("opus-4-8"); // model preserved
+
+    // the live panel (default ended=false) shows the real state, no badge
+    const live = stripAnsi(renderDetail(row, 120).join("\n"));
+    expect(live).not.toContain("session ended");
+    expect(live).toMatch(/state\s+busy/);
+
+    // the badge and "ended" word are yellow so the frozen panel reads as stopped
+    const styled = renderDetail(row, 120, true).join("\n");
+    expect(styled).toContain(`${YELLOW}session ended${RESET}`);
+    expect(styled).toContain(`${YELLOW}ended${RESET}`);
   });
 
   test("shows last prompt/turn times in the headers, not the state row", () => {
