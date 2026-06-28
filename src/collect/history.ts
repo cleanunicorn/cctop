@@ -350,6 +350,8 @@ function merge(contribs: Contrib[], subAgents: number): History {
     }
     return null;
   };
+  // Longest paths first, so a deep child (/repo/web/x) folds into /repo/web
+  // before that in turn folds into /repo — chains collapse the whole way up.
   for (const k of [...byProjectTally.keys()].sort(
     (a, b) => b.length - a.length,
   )) {

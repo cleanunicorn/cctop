@@ -9,7 +9,7 @@
 // already-aggregated History (collect/history.ts); the runtime (app.ts) layers
 // scrolling on top, exactly as it does for the detail view.
 
-import type { History } from "./collect/history.ts";
+import type { DayBucket, History } from "./collect/history.ts";
 import {
   BOLD,
   CYAN,
@@ -25,10 +25,12 @@ import {
 
 // --- formatting helpers -----------------------------------------------------
 
-// Compact magnitude for token counts: 1.2B / 3.4M / 56k / 789.
-export function big(n: number): string {
-  if (n >= 1e9) return `${(n / 1e9).toFixed(1)}B`;
-  if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
+// Compact magnitude for token counts: 1.2B / 3.4M / 56k / 789. `decimals` sets
+// the B/M precision — the default 1 for inline figures, 0 for the chart's value
+// axis (712M, no ".9M" noise).
+export function big(n: number, decimals = 1): string {
+  if (n >= 1e9) return `${(n / 1e9).toFixed(decimals)}B`;
+  if (n >= 1e6) return `${(n / 1e6).toFixed(decimals)}M`;
   if (n >= 1e3) return `${Math.round(n / 1e3)}k`;
   return String(Math.round(n));
 }
@@ -143,6 +145,7 @@ const VBLOCK = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇"];
 
 const HISTORY_DAYS = 30; // Claude keeps ~30 days (cleanupPeriodDays); show them all
 const CHART_H = 7; // bar-chart height in rows
+const Y_TICKS = 3; // value-axis labels (max, ⅔·max, ⅓·max)
 const DATE_W = 5; // width of an "MM/DD" label
 
 // "MM/DD" for a YYYY-MM-DD date string (e.g. 2026-06-08 → "06/08").
@@ -156,17 +159,27 @@ export function barEighths(turns: number, max: number): number {
   return Math.max(1, Math.round((turns / Math.max(1, max)) * CHART_H * 8));
 }
 
-// Per-day vertical bar chart over the last ~30 days (Claude Code's transcript
-// retention), scaled to the busiest day with eighth-block precision. A left
-// value axis marks the peak and its half; a date axis below carries evenly
-// spaced MM/DD ticks (always including the last day). Bars widen to fill the
-// width with a gap between days, and narrow again when space is tight. Returns
-// just the chart rows — the section header supplies the title.
+// Per-day vertical bar chart of tokens per day over the last ~30 days (Claude
+// Code's transcript retention), scaled to the busiest day with eighth-block
+// precision. A left value axis marks three evenly spaced levels (in compact
+// 1B/1M/1k form); a date axis below carries evenly spaced MM/DD ticks (including
+// the last day). Bars widen to fill the width with a gap between days, and
+// narrow again when space is tight. Returns just the chart rows.
+const dayTokens = (d: DayBucket) =>
+  d.inputFresh + d.cacheRead + d.cacheCreate + d.output;
+
 function activity(h: History, width: number): string[] {
   const all = h.days.slice(-HISTORY_DAYS);
   if (!all.length) return [];
-  const max = Math.max(1, ...all.map((d) => d.turns));
-  const labelW = String(max).length; // value-axis gutter
+  const max = Math.max(1, ...all.map(dayTokens));
+  // Evenly spaced value-axis ticks (max, ⅔·max, ⅓·max), keyed by chart row.
+  const yLabels = new Map<number, string>();
+  for (let i = 1; i <= Y_TICKS; i++)
+    yLabels.set(
+      Math.round((CHART_H - 1) * (1 - i / Y_TICKS)),
+      big((max * i) / Y_TICKS, 0),
+    );
+  const labelW = Math.max(...[...yLabels.values()].map((s) => s.length));
   const gutter = (s: string) => `${DIM}${pad(s, labelW, true)}${RESET}`;
 
   // Never draw more days than there are columns after the gutter, dropping the
@@ -175,7 +188,7 @@ function activity(h: History, width: number): string[] {
   const shown = all.slice(-Math.min(all.length, room));
   const n = shown.length;
 
-  const eighths = shown.map((d) => barEighths(d.turns, max));
+  const eighths = shown.map((d) => barEighths(dayTokens(d), max));
 
   // Fit a per-day stride (bar + gap) to the room left after the gutter. Aim for
   // 3-wide bars; drop the gap, then thin the bar, when a narrow terminal can't
@@ -186,9 +199,7 @@ function activity(h: History, width: number): string[] {
 
   // Value-axis ticks: the peak at the top row, ~half at the middle, each marked
   // with a ┤ on the axis.
-  const midRow = (CHART_H - 1) >> 1;
-  const yLabel = (r: number) =>
-    r === 0 ? String(max) : r === midRow ? String(Math.round(max / 2)) : "";
+  const yLabel = (r: number) => yLabels.get(r) ?? "";
 
   const out: string[] = [];
   for (let r = 0; r < CHART_H; r++) {
@@ -393,14 +404,13 @@ export function renderHistory(h: History, termCols: number): string[] {
     W,
     `last ${h.days.length} days`,
   );
-  // The chart has its own axes, so it gets just an inline title (no rule above
-  // it — a divider there reads as a heavy ceiling over the graph).
+  // The chart leads on its own (no title or rule — its axes carry it; a divider
+  // there reads as a heavy ceiling over the graph).
   const out: string[] = [
     titleLine,
     "━".repeat(W),
     summary,
     "",
-    `${BOLD}Activity${RESET}  ${DIM}turns per day${RESET}`,
     ...activity(h, W),
     "",
   ];
@@ -415,29 +425,20 @@ export function renderHistory(h: History, termCols: number): string[] {
   const mcp = toolStats(h, true, W);
   const leftW = Math.max(blockW("Tokens", tokens), blockW("Tools", tools));
   const rightW = Math.max(blockW("Models", models), blockW("MCP", mcp));
+  const tokensS = section("Tokens", tokens, leftW);
+  const modelsS = section("Models", models, rightW);
+  const toolsS = section("Tools", tools, leftW);
+  const mcpS = section("MCP", mcp, rightW);
 
   if (leftW + COL_GAP + rightW <= W) {
     out.push(
-      ...twoCol(
-        section("Tokens", tokens, leftW),
-        section("Models", models, rightW),
-        leftW,
-      ),
+      ...twoCol(tokensS, modelsS, leftW),
       "",
-      ...twoCol(
-        section("Tools", tools, leftW),
-        section("MCP", mcp, rightW),
-        leftW,
-      ),
+      ...twoCol(toolsS, mcpS, leftW),
       "",
     );
   } else {
-    for (const s of [
-      section("Tokens", tokens, leftW),
-      section("Models", models, rightW),
-      section("Tools", tools, leftW),
-      section("MCP", mcp, rightW),
-    ])
+    for (const s of [tokensS, modelsS, toolsS, mcpS])
       if (s.length) out.push(...s, "");
   }
 

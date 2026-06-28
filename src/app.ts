@@ -251,11 +251,17 @@ export async function runApp(opts: AppOptions): Promise<void> {
   let historyScanning = false;
   const loadHistory = async () => {
     if (historyScanning) return;
+    // A rescan keeps the prior frame up (no centered "Scanning…" note), so flash
+    // status in the footer to confirm it actually ran — the cached scan is fast
+    // and the data may look unchanged.
+    const rescan = state.history !== null;
     historyScanning = true;
     state.historyLoading = true;
+    if (rescan) flash("rescanning transcripts…");
     draw();
     try {
       state.history = await collectHistory();
+      if (rescan) flash(`history rescanned · ${clockTime()}`, GREEN);
     } catch (e: any) {
       flash(
         `could not scan history: ${sanitizeDisplay(e?.message ?? "failed")}`,
