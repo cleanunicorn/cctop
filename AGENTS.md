@@ -93,12 +93,15 @@ own usage cache `~/.claude/cctop/usage.json` (only under `--capture-usage`).
 The history view (`h`, TUI-only) is the one place that full-scans *every*
 transcript under `projects/` — session files and the `<id>/subagents/` tree
 alike — rather than tailing the live ones (`collect/history.ts`); it rolls every
-assistant turn into per-day token buckets and model/tool/project tallies, caches
-each file's contribution in memory (keyed by mtime+size, no disk write — the
-read-only contract holds). Sub-agent turns (which are `isSidechain`) count toward
-tokens/turns but not the session tally; session files skip their own inline
-sidechain turns to avoid double counting. The scan is fired on open and on `r`
-(rescan), never on the refresh timer.
+assistant turn into per-day token buckets, model/tool/project tallies, and a
+per-session list (sub-agent transcripts fold onto their session via the shared
+`<id>`), caches each file's contribution in memory (keyed by mtime+size, no disk
+write — the read-only contract holds). Sub-agent turns (which are `isSidechain`)
+count toward tokens/turns but not the session tally; session files skip their own
+inline sidechain turns to avoid double counting. The view has two tabs (`↹`):
+Sessions (the recent-session table) and Stats (token/model/tool/project
+composition). The scan is fired on open and on `r` (rescan), never on the
+refresh timer.
 
 Two cross-cutting rules worth knowing before you read the code. A Claude session
 spawned by another Claude (a background job or sub-session) gets its own

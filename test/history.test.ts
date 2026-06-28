@@ -199,6 +199,85 @@ describe("history merge", () => {
   });
 });
 
+describe("buildSessions", () => {
+  // an assistant turn with explicit cwd / model / tool blocks
+  const turn = (
+    ts: string,
+    o: {
+      input?: number;
+      tools?: string[];
+      model?: string;
+      sidechain?: boolean;
+    },
+  ) =>
+    JSON.stringify({
+      type: "assistant",
+      timestamp: ts,
+      cwd: "/Users/a/proj",
+      isSidechain: o.sidechain,
+      message: {
+        model: o.model ?? "claude-opus-4-8",
+        usage: { input_tokens: o.input ?? 0 },
+        content: (o.tools ?? []).map((name) => ({
+          type: "tool_use",
+          name,
+          input: {},
+        })),
+      },
+    });
+  const tfile = (path: string, session: boolean) => ({
+    path,
+    mtimeMs: 0,
+    size: 0,
+    session,
+  });
+
+  test("folds sub-agents by id, drops empties, sorts newest first", () => {
+    const main = H.aggregateLines([
+      turn("2026-06-20T10:00:00", { input: 100, tools: ["Bash"] }),
+      turn("2026-06-20T10:30:00", { input: 50, tools: ["Read", "Edit"] }),
+    ]);
+    const sub = H.aggregateLines(
+      [
+        turn("2026-06-20T10:15:00", {
+          input: 20,
+          tools: ["Grep"],
+          sidechain: true,
+        }),
+      ],
+      false,
+    );
+    const empty = H.aggregateLines([
+      JSON.stringify({ type: "user", timestamp: "2026-06-20T09:00:00" }),
+    ]);
+    const later = H.aggregateLines([
+      turn("2026-06-21T10:00:00", { input: 5, tools: ["Bash"] }),
+    ]);
+
+    const rows = H.buildSessions(
+      [
+        tfile("/c/projects/proj/sess1.jsonl", true),
+        tfile("/c/projects/proj/sess1/subagents/wf/a.jsonl", false), // sub-agent of sess1
+        tfile("/c/projects/proj/empty.jsonl", true),
+        tfile("/c/projects/proj/sess2.jsonl", true),
+      ],
+      [main, sub, empty, later],
+    );
+
+    // the empty (assistant-less) session is dropped; newest start first
+    expect(rows.map((r) => r.id)).toEqual(["sess2", "sess1"]);
+
+    const s1 = rows.find((r) => r.id === "sess1")!;
+    expect(s1.tokens).toBe(170); // 100 + 50 + 20 (sub-agent folded in)
+    expect(s1.turns).toBe(3); // 2 main + 1 sub-agent
+    expect(s1.tools).toBe(4); // Bash, Read, Edit + Grep
+    expect(s1.model).toBe("claude-opus-4-8");
+    expect(s1.project).toBe("/Users/a/proj");
+    expect(s1.startTs).toBe(Date.parse("2026-06-20T10:00:00"));
+    expect(s1.endTs).toBe(Date.parse("2026-06-20T10:30:00"));
+  });
+});
+
 describe("activity chart", () => {
   test("an active day never scales down to a blank bar", () => {
     expect(R.barEighths(0, 1000)).toBe(0); // no activity → blank
@@ -214,6 +293,9 @@ describe("formatting", () => {
     expect(R.big(1500)).toBe("2k");
     expect(R.big(1_500_000)).toBe("1.5M");
     expect(R.big(2_000_000_000)).toBe("2.0B");
+    // decimals=0 (the chart axis): rounded, no ".9M" noise
+    expect(R.big(711_900_000, 0)).toBe("712M");
+    expect(R.big(1_500_000_000, 0)).toBe("2B");
   });
 
   test("shortTool rewrites mcp ids to server:tool, passing built-ins through", () => {
@@ -300,5 +382,68 @@ describe("renderHistory", () => {
     // the MCP tool shows rewritten under its own list, not the raw mcp__ id
     expect(text).toContain("bun-docs:search_bun");
     expect(text).not.toContain("mcp__bun-docs");
+  });
+
+  test("the sessions tab lists sessions and fits the column budget", () => {
+    const c = H.aggregateLines([
+      aTurn("2026-06-20T01:00:00", { input_tokens: 1_000_000 }),
+    ]);
+    const sessions = [
+      {
+        id: "abc",
+        project: "/Users/a/some-long-project-name",
+        model: "claude-opus-4-8",
+        startTs: Date.parse("2026-06-20T13:34:00"),
+        endTs: Date.parse("2026-06-20T14:00:00"),
+        tokens: 1_500_000,
+        turns: 42,
+        tools: 99,
+      },
+    ];
+    const h = H.merge([c], 0, sessions);
+    const stacked = renderHistory(h, 120, "sessions").join("\n");
+    // tab bar present, and the session row shows under the Sessions tab
+    expect(stacked).toContain("Sessions");
+    expect(stacked).toContain("Stats");
+    expect(stacked).toContain("Age");
+    expect(stacked).toContain("a/some-long-project-name");
+    expect(stacked).toContain("opus-4-8");
+    for (const width of [60, 80, 120])
+      for (const line of renderHistory(h, width, "sessions"))
+        expect(visLen(line)).toBeLessThanOrEqual(width);
+  });
+
+  test("the sessions tab excludes live sessions", () => {
+    const c = H.aggregateLines([
+      aTurn("2026-06-20T01:00:00", { input_tokens: 1000 }),
+    ]);
+    const sessions = [
+      {
+        id: "live",
+        project: "/a/x",
+        model: "claude-opus-4-8",
+        startTs: 1e12,
+        endTs: 1e12,
+        tokens: 9,
+        turns: 1,
+        tools: 1,
+      },
+      {
+        id: "done",
+        project: "/a/y",
+        model: "claude-opus-4-8",
+        startTs: 1e12,
+        endTs: 1e12,
+        tokens: 9,
+        turns: 1,
+        tools: 1,
+      },
+    ];
+    const h = H.merge([c], 0, sessions);
+    const text = renderHistory(h, 120, "sessions", {
+      liveIds: new Set(["live"]),
+    }).join("\n");
+    expect(text).toContain("a/y"); // ended session shown
+    expect(text).not.toContain("a/x"); // live session hidden
   });
 });

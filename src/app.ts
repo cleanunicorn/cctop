@@ -33,7 +33,7 @@ import {
   visLen,
   YELLOW,
 } from "./format.ts";
-import { renderHistory } from "./history.ts";
+import { type HistoryTab, renderHistory } from "./history.ts";
 import {
   buildFrame,
   type Group,
@@ -68,6 +68,7 @@ interface State {
   history: History | null; // aggregated history, scanned on first open then cached
   historyLoading: boolean; // a full-scan is in flight (first open or rescan)
   historyScroll: number; // first visible line (history)
+  historyTab: HistoryTab; // active history tab (sessions | stats)
   message: string | null;
   messageColor: string;
   messageUntil: number;
@@ -129,6 +130,7 @@ export async function runApp(opts: AppOptions): Promise<void> {
     history: null,
     historyLoading: false,
     historyScroll: 0,
+    historyTab: "sessions",
     message: null,
     messageColor: DIM,
     messageUntil: 0,
@@ -431,6 +433,14 @@ export async function runApp(opts: AppOptions): Promise<void> {
 
   const onHistoryKey = (k: string) => {
     switch (k) {
+      case "tab":
+      case "left":
+      case "right":
+        // toggle Sessions <-> Stats; reset scroll so the new tab starts at top
+        state.historyTab =
+          state.historyTab === "sessions" ? "stats" : "sessions";
+        state.historyScroll = 0;
+        break;
       case "up":
       case "k":
         state.historyScroll = Math.max(0, state.historyScroll - 1);
@@ -589,6 +599,8 @@ export async function runApp(opts: AppOptions): Promise<void> {
         return "backspace";
       case "\x1b":
         return "escape";
+      case "\t":
+        return "tab";
       case "\x03":
         return "ctrl-c";
       default:
@@ -868,7 +880,13 @@ export async function runApp(opts: AppOptions): Promise<void> {
       return [...body, footer];
     }
     if (!state.history) return [...Array(region).fill(""), footer];
-    const body = renderHistory(state.history, cols - 2).map((l) => `  ${l}`);
+    // live session ids so the Sessions tab can show only ended ones
+    const liveIds = new Set<string>();
+    for (const r of state.rows) if (r.sessionId) liveIds.add(r.sessionId);
+    const body = renderHistory(state.history, cols - 2, state.historyTab, {
+      liveIds,
+      now: Date.now(),
+    }).map((l) => `  ${l}`);
     const clipped = clipLines(body, region, state.historyScroll);
     state.historyScroll = clipped.scroll;
     return [...clipped.lines, footer];
@@ -892,7 +910,7 @@ export async function runApp(opts: AppOptions): Promise<void> {
       b("View"),
       key("/", "filter sessions (type, enter to apply)"),
       key("s", "cycle sort (default, cpu, mem, ctx, pid)"),
-      key("h", "session history (↑↓ scroll, r rescan, esc back)"),
+      key("h", "session history (↹ tabs, ↑↓ scroll, r rescan, esc back)"),
       key("?", "toggle this help"),
       "",
       b("Actions"),
@@ -961,14 +979,18 @@ export async function runApp(opts: AppOptions): Promise<void> {
     const sort = SORTS[state.sortIndex].name;
     const hint =
       state.mode === "history"
-        ? "↑↓ scroll · r rescan · esc back · q exit"
+        ? "↹ tabs · ↑↓ scroll · r rescan · esc back · q exit"
         : state.mode === "detail"
           ? // x/f no-op on an ended session, so drop them from the hint and say why
             state.detailEnded
             ? "session ended · ↑↓ scroll · esc back · q exit"
             : "↑↓ scroll · esc back · x quit · f free ports · q exit"
           : `↑↓ move · enter detail · / filter · s sort:${sort} · h history · x quit · ? help · q exit`;
-    const left = `${DIM}cctop/${opts.version} · every ${opts.watchSecs}s · ${clockTime()}${RESET}`;
+    // the history view doesn't auto-refresh, so drop the "every Ns · clock" part
+    const left =
+      state.mode === "history"
+        ? `${DIM}cctop/${opts.version}${RESET}`
+        : `${DIM}cctop/${opts.version} · every ${opts.watchSecs}s · ${clockTime()}${RESET}`;
     const line = `${left}  ${DIM}·${RESET}  ${DIM}${hint}${RESET}`;
     return visLen(line) > cols
       ? `${DIM}${truncateVisible(hint, cols)}${RESET}`

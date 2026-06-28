@@ -9,19 +9,23 @@
 // already-aggregated History (collect/history.ts); the runtime (app.ts) layers
 // scrolling on top, exactly as it does for the detail view.
 
-import type { DayBucket, History } from "./collect/history.ts";
+import type { DayBucket, History, SessionRow } from "./collect/history.ts";
 import {
   BOLD,
   CYAN,
   DIM,
+  formatDuration,
   GREEN,
   pad,
   RESET,
+  REVERSE,
   shortModel,
   truncate,
   truncateStart,
   visLen,
 } from "./format.ts";
+
+export type HistoryTab = "sessions" | "stats";
 
 // --- formatting helpers -----------------------------------------------------
 
@@ -256,6 +260,7 @@ function activity(h: History, width: number): string[] {
 const TOP_MODELS = 6;
 const TOP_TOOLS = 8;
 const TOP_PROJECTS = 8;
+const TOP_SESSIONS = 20;
 
 // Token volume: the input total, then the three input classes with their share
 // of input (a high cache-read share means most input was cheap cache hits), then
@@ -315,61 +320,157 @@ function toolStats(h: History, mcp: boolean, width: number): string[] {
   return statRows(rows, width, mcp ? { nameCap: MCP_NAME_MAX } : {});
 }
 
-// Per-project breakdown as a top-style table: right-aligned Sessions / Tokens /
-// Turns columns under dim headers, then a Project column sized to its content
-// (named by its last two path segments, cut from the front if it would overflow
-// the frame). Tokens green, like everywhere else.
-function projectsTable(h: History, width: number): string[] {
-  const data = [...h.byProject.entries()]
-    .sort((a, b) => b[1].tokens - a[1].tokens)
-    .slice(0, TOP_PROJECTS)
-    .map(([p, t]) => ({
-      sessions: String(t.sessions),
-      tokens: big(t.tokens),
-      turns: big(t.turns),
-      project: lastDirs(p, 2),
-    }));
-  if (!data.length) return [];
-
-  type Row = (typeof data)[number];
-  const cols: {
-    header: string;
-    get: (r: Row) => string;
-    right: boolean;
-    color: string;
-  }[] = [
-    { header: "Sessions", get: (r) => r.sessions, right: true, color: "" },
-    { header: "Tokens", get: (r) => r.tokens, right: true, color: GREEN },
-    { header: "Turns", get: (r) => r.turns, right: true, color: "" },
-    { header: "Project", get: (r) => r.project, right: false, color: "" },
-  ];
-
-  // Every column sizes to its header/values; the Project column is only capped
-  // (never expanded) to the space left in the frame, truncating from the front.
+// A top-style table: a dim header row, then one row per record. Every column
+// sizes to its content; only the last (flexible) column is capped to the space
+// left in the frame and truncated from the front so its tail stays. `right`
+// right-aligns a column, `color` tints its values.
+interface Col<R> {
+  header: string;
+  get: (r: R) => string;
+  right?: boolean;
+  color?: string;
+}
+function table<R>(cols: Col<R>[], rows: R[], width: number): string[] {
+  if (!rows.length) return [];
   const widths = cols.map((c) =>
-    Math.max(c.header.length, ...data.map((r) => visLen(c.get(r)))),
+    Math.max(c.header.length, ...rows.map((r) => visLen(c.get(r)))),
   );
-  const lead =
-    widths.slice(0, -1).reduce((a, b) => a + b, 0) + 2 * (cols.length - 1);
-  widths[widths.length - 1] = Math.min(
-    widths[widths.length - 1],
-    Math.max(8, width - lead),
-  );
-
-  const cell = (text: string, i: number, color: string) =>
-    `${color}${pad(i === cols.length - 1 ? truncateStart(text, widths[i]) : text, widths[i], cols[i].right)}${color ? RESET : ""}`;
-
-  const out = [
-    `${DIM}${cols.map((c, i) => pad(c.header, widths[i], c.right)).join("  ")}${RESET}`,
+  const last = widths.length - 1;
+  const lead = widths.slice(0, -1).reduce((a, b) => a + b, 0) + 2 * last;
+  widths[last] = Math.min(widths[last], Math.max(8, width - lead));
+  const cell = (c: Col<R>, i: number, r: R) => {
+    const raw = i === last ? truncateStart(c.get(r), widths[i]) : c.get(r);
+    const padded = pad(raw, widths[i], c.right);
+    return c.color ? `${c.color}${padded}${RESET}` : padded;
+  };
+  const header = `${DIM}${cols
+    .map((c, i) => pad(c.header, widths[i], c.right))
+    .join("  ")}${RESET}`;
+  return [
+    header,
+    ...rows.map((r) => cols.map((c, i) => cell(c, i, r)).join("  ")),
   ];
-  for (const r of data)
-    out.push(cols.map((c, i) => cell(c.get(r), i, c.color)).join("  "));
+}
+
+// Per-project breakdown: Sessions / Tokens / Turns and a Project column (named by
+// its last two path segments). Tokens green, like everywhere else.
+function projectsTable(h: History, width: number): string[] {
+  const rows = [...h.byProject.entries()]
+    .sort((a, b) => b[1].tokens - a[1].tokens)
+    .slice(0, TOP_PROJECTS);
+  return table<(typeof rows)[number]>(
+    [
+      { header: "Sessions", get: ([, t]) => String(t.sessions), right: true },
+      {
+        header: "Tokens",
+        get: ([, t]) => big(t.tokens),
+        right: true,
+        color: GREEN,
+      },
+      { header: "Turns", get: ([, t]) => big(t.turns), right: true },
+      { header: "Project", get: ([p]) => lastDirs(p, 2) },
+    ],
+    rows,
+    width,
+  );
+}
+
+// The most recent ended sessions (live ones excluded via `live`): how long ago
+// each started, its token/turn footprint (sub-agents folded in), dominant model,
+// and project.
+function sessionsTable(
+  h: History,
+  width: number,
+  live: Set<string>,
+  now: number,
+): string[] {
+  const ended = h.sessions.filter((s) => !live.has(s.id));
+  const rows = ended.slice(0, TOP_SESSIONS);
+  const out = table<SessionRow>(
+    [
+      {
+        header: "Age",
+        get: (s) => formatDuration((now - s.startTs) / 1000),
+        right: true,
+      },
+      {
+        header: "Dur",
+        get: (s) => formatDuration((s.endTs - s.startTs) / 1000),
+        right: true,
+      },
+      {
+        header: "Tokens",
+        get: (s) => big(s.tokens),
+        right: true,
+        color: GREEN,
+      },
+      { header: "Turns", get: (s) => big(s.turns), right: true },
+      { header: "Tools", get: (s) => big(s.tools), right: true },
+      { header: "Model", get: (s) => shortModel(s.model) ?? "?" },
+      { header: "Project", get: (s) => lastDirs(s.project, 2) },
+    ],
+    rows,
+    width,
+  );
+  // a "+N more" tail when the list is capped, like the main TUI's tree overflow
+  const hidden = ended.length - rows.length;
+  if (hidden > 0) out.push(`${DIM}+${hidden} more${RESET}`);
+  return out;
+}
+
+// Sessions | Stats tab bar: the active tab in reverse video, the other in plain
+// (readable) text — not dimmed.
+function tabBar(active: HistoryTab): string {
+  const tab = (label: string, on: boolean) =>
+    on ? `${REVERSE} ${label} ${RESET}` : ` ${label} `;
+  return `${tab("Sessions", active === "sessions")} ${tab("Stats", active === "stats")}`;
+}
+
+// The Stats tab: token volume and model/tool/MCP/project composition. The four
+// small lists pair up Tokens|Models and Tools|MCP — each column sized to its own
+// content (not half the frame) so the two cards sit close together, sharing a
+// column width so they line up; they stack only when even content-sized columns
+// wouldn't fit side by side. Projects is a full table below.
+function statsTab(h: History, W: number): string[] {
+  const tokens = tokenStats(h, W);
+  const models = modelStats(h, W);
+  const tools = toolStats(h, false, W);
+  const mcp = toolStats(h, true, W);
+  const leftW = Math.max(blockW("Tokens", tokens), blockW("Tools", tools));
+  const rightW = Math.max(blockW("Models", models), blockW("MCP", mcp));
+  const tokensS = section("Tokens", tokens, leftW);
+  const modelsS = section("Models", models, rightW);
+  const toolsS = section("Tools", tools, leftW);
+  const mcpS = section("MCP", mcp, rightW);
+
+  const out: string[] = [];
+  const twoColumn = leftW + COL_GAP + rightW <= W;
+  if (twoColumn) {
+    out.push(
+      ...twoCol(tokensS, modelsS, leftW),
+      "",
+      ...twoCol(toolsS, mcpS, leftW),
+      "",
+    );
+  } else {
+    for (const s of [tokensS, modelsS, toolsS, mcpS])
+      if (s.length) out.push(...s, "");
+  }
+  // Match the Projects rule to the paired columns' right edge above it so the
+  // stats rules line up; the stacked layout just uses the frame width.
+  const projW = twoColumn ? leftW + COL_GAP + rightW : W;
+  out.push(...section("Projects", projectsTable(h, projW), projW));
   return out;
 }
 
 // --- entry point ------------------------------------------------------------
 
-export function renderHistory(h: History, termCols: number): string[] {
+export function renderHistory(
+  h: History,
+  termCols: number,
+  tab: HistoryTab = "stats",
+  opts: { liveIds?: Set<string>; now?: number } = {},
+): string[] {
   // Cap the frame so the dashboard stays compact on a wide terminal rather than
   // stretching edge to edge.
   const W = Math.min(Math.max(termCols, 20), MAX_W);
@@ -398,14 +499,13 @@ export function renderHistory(h: History, termCols: number): string[] {
       ? summaryColored
       : `${DIM}${truncate(summaryPlain, W)}${RESET}`;
 
-  // header: title (with day span) over a heavy rule, then the summary strip
+  // header: title (with day span) over a heavy rule, then the summary strip, then
+  // the headline chart (no title/rule — its axes carry it).
   const [titleLine] = sectionHead(
     "Session history",
     W,
     `last ${h.days.length} days`,
   );
-  // The chart leads on its own (no title or rule — its axes carry it; a divider
-  // there reads as a heavy ceiling over the graph).
   const out: string[] = [
     titleLine,
     "━".repeat(W),
@@ -413,37 +513,14 @@ export function renderHistory(h: History, termCols: number): string[] {
     "",
     ...activity(h, W),
     "",
+    tabBar(tab),
+    "",
   ];
-
-  // The four small lists pair up Tokens|Models and Tools|MCP. Each column is
-  // sized to its own content (not half the frame) so the two cards sit close
-  // together; the left/right cards share a column width so they line up. They
-  // stack only when even content-sized columns wouldn't fit side by side.
-  const tokens = tokenStats(h, W);
-  const models = modelStats(h, W);
-  const tools = toolStats(h, false, W);
-  const mcp = toolStats(h, true, W);
-  const leftW = Math.max(blockW("Tokens", tokens), blockW("Tools", tools));
-  const rightW = Math.max(blockW("Models", models), blockW("MCP", mcp));
-  const tokensS = section("Tokens", tokens, leftW);
-  const modelsS = section("Models", models, rightW);
-  const toolsS = section("Tools", tools, leftW);
-  const mcpS = section("MCP", mcp, rightW);
-
-  if (leftW + COL_GAP + rightW <= W) {
-    out.push(
-      ...twoCol(tokensS, modelsS, leftW),
-      "",
-      ...twoCol(toolsS, mcpS, leftW),
-      "",
-    );
-  } else {
-    for (const s of [tokensS, modelsS, toolsS, mcpS])
-      if (s.length) out.push(...s, "");
-  }
-
-  const projects = projectsTable(h, W);
-  out.push(...section("Projects", projects, blockW("Projects", projects)));
+  out.push(
+    ...(tab === "sessions"
+      ? sessionsTable(h, W, opts.liveIds ?? new Set(), opts.now ?? Date.now())
+      : statsTab(h, W)),
+  );
   return out;
 }
 

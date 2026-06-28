@@ -47,11 +47,25 @@ export interface ProjectStat extends Tally {
   sessions: number;
 }
 
+// One top-level session for the Sessions list, with tokens/turns folded in from
+// its sub-agent transcripts (matched by the shared <id>).
+export interface SessionRow {
+  id: string;
+  project: string; // full cwd (renderer shortens it)
+  model: string; // dominant model of the main session
+  startTs: number; // first turn timestamp (ms)
+  endTs: number; // last turn timestamp (ms), for duration
+  tokens: number;
+  turns: number;
+  tools: number; // total tool calls (built-in + MCP + web)
+}
+
 export interface History {
   days: DayBucket[]; // ascending, contiguous (gaps zero-filled)
   byModel: Map<string, Tally>;
   byTool: Map<string, number>; // tool_use name -> count; + web_search/web_fetch
   byProject: Map<string, ProjectStat>; // key = full cwd (renderer shortens it)
+  sessions: SessionRow[]; // top-level sessions, newest first
   totals: {
     tokens: number;
     turns: number;
@@ -71,6 +85,7 @@ interface Contrib {
   byTool: Map<string, number>;
   byProject: Map<string, Tally>;
   firstTs: number | null; // earliest entry timestamp (ms), for sessionsStarted
+  lastTs: number | null; // latest entry timestamp (ms), for session duration
   project: string | null; // this session's project (cwd); null for sub-agent files
 }
 
@@ -103,6 +118,7 @@ function aggregateLines(lines: Iterable<string>, session = true): Contrib {
     byTool: new Map(),
     byProject: new Map(),
     firstTs: null,
+    lastTs: null,
     project: null,
   };
   for (const line of lines) {
@@ -114,8 +130,10 @@ function aggregateLines(lines: Iterable<string>, session = true): Contrib {
       continue; // half-written or malformed line
     }
     const ts = e.timestamp ? Date.parse(e.timestamp) : Number.NaN;
-    if (session && !Number.isNaN(ts) && (c.firstTs === null || ts < c.firstTs))
-      c.firstTs = ts;
+    if (session && !Number.isNaN(ts)) {
+      if (c.firstTs === null || ts < c.firstTs) c.firstTs = ts;
+      if (c.lastTs === null || ts > c.lastTs) c.lastTs = ts;
+    }
 
     if (e.type !== "assistant") continue;
     if (session && e.isSidechain) continue; // counted from the sub-agent file
@@ -292,7 +310,11 @@ function listTranscripts(): TFile[] {
 // Fold every file's Contrib into the final History: merge the tallies, then
 // build a contiguous ascending day array (gaps zero-filled) and add each
 // session's start to its first day.
-function merge(contribs: Contrib[], subAgents: number): History {
+function merge(
+  contribs: Contrib[],
+  subAgents: number,
+  sessions: SessionRow[] = [],
+): History {
   const days = new Map<string, DayBucket>();
   const byModel = new Map<string, Tally>();
   const byTool = new Map<string, number>();
@@ -410,6 +432,7 @@ function merge(contribs: Contrib[], subAgents: number): History {
     byModel,
     byTool,
     byProject,
+    sessions,
     totals: {
       tokens: totalTokens,
       turns: totalTurns,
@@ -419,6 +442,60 @@ function merge(contribs: Contrib[], subAgents: number): History {
       lastDay: last,
     },
   };
+}
+
+// The parent session id of a transcript: the file's basename for a session file,
+// or the <id> directory above the subagents/ tree for a sub-agent file. Both
+// share it, so sub-agent usage folds back onto its session.
+function sessionIdOf(f: TFile): string {
+  if (f.session)
+    return f.path.slice(f.path.lastIndexOf("/") + 1).replace(/\.jsonl$/, "");
+  const head = f.path.split("/subagents/")[0]; // .../projects/<proj>/<id>
+  return head.slice(head.lastIndexOf("/") + 1);
+}
+
+// One row per top-level session, newest first, with tokens/turns summed across
+// the main transcript and its sub-agents (grouped by the shared id). The main
+// file fixes the session's start, project, and dominant model.
+function buildSessions(files: TFile[], contribs: Contrib[]): SessionRow[] {
+  const byId = new Map<string, SessionRow>();
+  files.forEach((f, i) => {
+    const c = contribs[i];
+    const id = sessionIdOf(f);
+    let s = byId.get(id);
+    if (!s) {
+      s = {
+        id,
+        project: "?",
+        model: "?",
+        startTs: 0,
+        endTs: 0,
+        tokens: 0,
+        turns: 0,
+        tools: 0,
+      };
+      byId.set(id, s);
+    }
+    for (const t of c.byModel.values()) {
+      s.tokens += t.tokens;
+      s.turns += t.turns;
+    }
+    for (const n of c.byTool.values()) s.tools += n;
+    if (f.session) {
+      s.startTs = c.firstTs ?? 0;
+      s.endTs = c.lastTs ?? 0;
+      s.project = c.project ?? "?";
+      let bestTokens = -1;
+      for (const [m, t] of c.byModel)
+        if (t.tokens > bestTokens) {
+          bestTokens = t.tokens;
+          s.model = m;
+        }
+    }
+  });
+  return [...byId.values()]
+    .filter((s) => s.startTs > 0 && s.turns > 0) // skip orphans and empty sessions
+    .sort((a, b) => b.startTs - a.startTs);
 }
 
 // Read concurrency for the full scan: enough overlap to hide I/O latency without
@@ -436,8 +513,8 @@ export async function collectHistory(): Promise<History> {
     contribFor(f.path, f.mtimeMs, f.size, f.session),
   );
   const subAgents = files.reduce((n, f) => n + (f.session ? 0 : 1), 0);
-  return merge(contribs, subAgents);
+  return merge(contribs, subAgents, buildSessions(files, contribs));
 }
 
 // Exported for tests only.
-export const __test = { aggregateLines, merge, dateKey };
+export const __test = { aggregateLines, merge, dateKey, buildSessions };
