@@ -70,10 +70,10 @@ With Homebrew:
 brew upgrade stefanprodan/tap/cctop
 ```
 
-Or upgrade the scrip to the latest [release](https://github.com/stefanprodan/cctop/releases) with Bun:
+Or upgrade the script to the latest [release](https://github.com/stefanprodan/cctop/releases) with Bun:
 
 ```sh
-bun install -g github:stefanprodan/cctop#v0.3.0
+bun rm -g cctop; bun install -g github:stefanprodan/cctop#v0.3.0
 ```
 
 ### Uninstall
