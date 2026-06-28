@@ -7,7 +7,9 @@
 // overlays, and runs process actions (quit a session).
 
 import {
+  collectHistory,
   collectRows,
+  type History,
   type Instance,
   matchRow,
   type NetRate,
@@ -31,6 +33,7 @@ import {
   visLen,
   YELLOW,
 } from "./format.ts";
+import { type HistoryTab, renderHistory } from "./history.ts";
 import {
   buildFrame,
   type Group,
@@ -39,7 +42,7 @@ import {
   rowKey,
 } from "./render.ts";
 
-type Mode = "list" | "detail" | "filter" | "confirm" | "help";
+type Mode = "list" | "detail" | "filter" | "confirm" | "help" | "history";
 
 // A pending destructive action awaiting y/n. "quit" signals the session pid;
 // "free" signals the session's orphaned dev-server processes to release their
@@ -62,6 +65,10 @@ interface State {
   detailScroll: number; // first visible line (detail)
   detailRow: Instance | null; // last-known snapshot of the session in detail view
   detailEnded: boolean; // that session has disappeared from the live set
+  history: History | null; // aggregated history, scanned on first open then cached
+  historyLoading: boolean; // a full-scan is in flight (first open or rescan)
+  historyScroll: number; // first visible line (history)
+  historyTab: HistoryTab; // active history tab (sessions | stats)
   message: string | null;
   messageColor: string;
   messageUntil: number;
@@ -120,6 +127,10 @@ export async function runApp(opts: AppOptions): Promise<void> {
     detailScroll: 0,
     detailRow: null,
     detailEnded: false,
+    history: null,
+    historyLoading: false,
+    historyScroll: 0,
+    historyTab: "sessions",
     message: null,
     messageColor: DIM,
     messageUntil: 0,
@@ -231,6 +242,37 @@ export async function runApp(opts: AppOptions): Promise<void> {
     // listScreen re-validates the cursor (the only surface that shows it), so a
     // session ending while the user sits in detail or a confirm never moves the
     // pinned selection. Just repaint.
+    draw();
+  };
+
+  // Full-scan every transcript and aggregate the history. Kept off the refresh
+  // timer (it reads the whole corpus); fired on first open and on an explicit
+  // rescan (r). The per-file cache in collectHistory makes a rescan cheap. The
+  // previous result stays on screen while a rescan runs, so the view never
+  // blanks. Read-only — nothing here writes to disk.
+  let historyScanning = false;
+  const loadHistory = async () => {
+    if (historyScanning) return;
+    // A rescan keeps the prior frame up (no centered "Scanning…" note), so flash
+    // status in the footer to confirm it actually ran — the cached scan is fast
+    // and the data may look unchanged.
+    const rescan = state.history !== null;
+    historyScanning = true;
+    state.historyLoading = true;
+    if (rescan) flash("rescanning transcripts…");
+    draw();
+    try {
+      state.history = await collectHistory();
+      if (rescan) flash(`history rescanned · ${clockTime()}`, GREEN);
+    } catch (e: any) {
+      flash(
+        `could not scan history: ${sanitizeDisplay(e?.message ?? "failed")}`,
+        RED,
+      );
+    } finally {
+      historyScanning = false;
+      state.historyLoading = false;
+    }
     draw();
   };
 
@@ -374,12 +416,60 @@ export async function runApp(opts: AppOptions): Promise<void> {
         }
         break;
       }
+      case "h":
+        state.mode = "history";
+        state.historyScroll = 0;
+        if (!state.history) void loadHistory(); // first open: scan; else reuse cache
+        break;
       case "?":
         state.mode = "help";
         break;
       case "q":
         quit();
         return;
+    }
+    draw();
+  };
+
+  const onHistoryKey = (k: string) => {
+    switch (k) {
+      case "tab":
+      case "left":
+      case "right":
+        // toggle Sessions <-> Stats; reset scroll so the new tab starts at top
+        state.historyTab =
+          state.historyTab === "sessions" ? "stats" : "sessions";
+        state.historyScroll = 0;
+        break;
+      case "up":
+      case "k":
+        state.historyScroll = Math.max(0, state.historyScroll - 1);
+        break;
+      case "down":
+      case "j":
+        state.historyScroll += 1;
+        break;
+      case "pageup":
+        state.historyScroll = Math.max(0, state.historyScroll - 10);
+        break;
+      case "pagedown":
+        state.historyScroll += 10;
+        break;
+      case "g":
+      case "home":
+        state.historyScroll = 0;
+        break;
+      case "G":
+      case "end":
+        state.historyScroll = Number.MAX_SAFE_INTEGER; // clipLines clamps to end
+        break;
+      case "r":
+        void loadHistory(); // rescan: re-reads only changed transcripts
+        break;
+      case "escape":
+      case "q":
+        state.mode = "list";
+        break;
     }
     draw();
   };
@@ -509,6 +599,8 @@ export async function runApp(opts: AppOptions): Promise<void> {
         return "backspace";
       case "\x1b":
         return "escape";
+      case "\t":
+        return "tab";
       case "\x03":
         return "ctrl-c";
       default:
@@ -599,6 +691,9 @@ export async function runApp(opts: AppOptions): Promise<void> {
         case "help":
           onHelpKey(k);
           break;
+        case "history":
+          onHistoryKey(k);
+          break;
       }
     }
   });
@@ -621,9 +716,11 @@ export async function runApp(opts: AppOptions): Promise<void> {
     const lines =
       state.mode === "help"
         ? helpScreen(rows, opts)
-        : state.mode === "detail"
-          ? detailScreen(cols, rows)
-          : listScreen(cols, rows);
+        : state.mode === "history"
+          ? historyScreen(cols, rows)
+          : state.mode === "detail"
+            ? detailScreen(cols, rows)
+            : listScreen(cols, rows);
     const frame = lines.map((l) => `${l}\x1b[K`).join("\n");
     const body = `\x1b[H${frame}\x1b[J`;
     out.write(syncOutput ? `\x1b[?2026h${body}\x1b[?2026l` : body);
@@ -771,6 +868,30 @@ export async function runApp(opts: AppOptions): Promise<void> {
     return [...clipped.lines, footer];
   }
 
+  function historyScreen(cols: number, termRows: number): string[] {
+    const footer = GUTTER + footerLine(cols - GUTTER.length);
+    const region = Math.max(termRows - 1, 1);
+    // First open has no data yet: center a scanning note where the dashboard
+    // will land. A rescan keeps the prior frame on screen instead of blanking.
+    if (state.historyLoading && !state.history) {
+      const note = center(`${DIM}Scanning transcripts…${RESET}`, cols);
+      const body = Array(region).fill("");
+      body[Math.floor(region / 2)] = note;
+      return [...body, footer];
+    }
+    if (!state.history) return [...Array(region).fill(""), footer];
+    // live session ids so the Sessions tab can show only ended ones
+    const liveIds = new Set<string>();
+    for (const r of state.rows) if (r.sessionId) liveIds.add(r.sessionId);
+    const body = renderHistory(state.history, cols - 2, state.historyTab, {
+      liveIds,
+      now: Date.now(),
+    }).map((l) => `  ${l}`);
+    const clipped = clipLines(body, region, state.historyScroll);
+    state.historyScroll = clipped.scroll;
+    return [...clipped.lines, footer];
+  }
+
   function helpScreen(termRows: number, o: AppOptions): string[] {
     const b = (s: string) => `${BOLD}${s}${RESET}`;
     const key = (k: string, d: string) =>
@@ -789,6 +910,7 @@ export async function runApp(opts: AppOptions): Promise<void> {
       b("View"),
       key("/", "filter sessions (type, enter to apply)"),
       key("s", "cycle sort (default, cpu, mem, ctx, pid)"),
+      key("h", "session history (↹ tabs, ↑↓ scroll, r rescan, esc back)"),
       key("?", "toggle this help"),
       "",
       b("Actions"),
@@ -856,13 +978,19 @@ export async function runApp(opts: AppOptions): Promise<void> {
     }
     const sort = SORTS[state.sortIndex].name;
     const hint =
-      state.mode === "detail"
-        ? // x/f no-op on an ended session, so drop them from the hint and say why
-          state.detailEnded
-          ? "session ended · ↑↓ scroll · esc back · q exit"
-          : "↑↓ scroll · esc back · x quit · f free ports · q exit"
-        : `↑↓ move · enter detail · / filter · s sort:${sort} · x quit · ? help · q exit`;
-    const left = `${DIM}cctop/${opts.version} · every ${opts.watchSecs}s · ${clockTime()}${RESET}`;
+      state.mode === "history"
+        ? "↹ tabs · ↑↓ scroll · r rescan · esc back · q exit"
+        : state.mode === "detail"
+          ? // x/f no-op on an ended session, so drop them from the hint and say why
+            state.detailEnded
+            ? "session ended · ↑↓ scroll · esc back · q exit"
+            : "↑↓ scroll · esc back · x quit · f free ports · q exit"
+          : `↑↓ move · enter detail · / filter · s sort:${sort} · h history · x quit · ? help · q exit`;
+    // the history view doesn't auto-refresh, so drop the "every Ns · clock" part
+    const left =
+      state.mode === "history"
+        ? `${DIM}cctop/${opts.version}${RESET}`
+        : `${DIM}cctop/${opts.version} · every ${opts.watchSecs}s · ${clockTime()}${RESET}`;
     const line = `${left}  ${DIM}·${RESET}  ${DIM}${hint}${RESET}`;
     return visLen(line) > cols
       ? `${DIM}${truncateVisible(hint, cols)}${RESET}`

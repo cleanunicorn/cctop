@@ -24,6 +24,9 @@ waiting for input.
 - **Quit a runaway session** in place (`x` → `SIGTERM`, with confirm), or
   **free ports** held by a session's leftover dev server
   (`f` in the detail view).
+- **Session history** (`h`) — a dashboard over past sessions: a per-day
+  token-usage chart, recent sessions, and breakdowns by model, tool/MCP, and
+  project.
 - **Read-only and local** — the TUI reads only `~/.claude` and the process table,
   spawns no processes.
 - **Zero dependencies** — a single Bun program with no npm packages;
@@ -105,6 +108,7 @@ While the TUI is running:
 | `PgUp`/`PgDn`   | jump 10 rows                                                     |
 | `g` / `G`       | jump to top / bottom                                             |
 | `enter`         | open the detail view for the selected session                    |
+| `h`             | open the session history dashboard (`↹` tabs, `r` rescan)        |
 | `esc`           | leave the detail view / close an overlay                         |
 | `/`             | filter sessions (type, `enter` to apply)                         |
 | `s`             | cycle the sort column (default, cpu, mem, ctx, pid)              |

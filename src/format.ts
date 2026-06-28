@@ -94,6 +94,12 @@ export function formatCountdown(sec: number) {
   return `${sec}s`;
 }
 
+// Model ids shown compactly: drop the "claude-" prefix and any trailing
+// -YYYYMMDD date stamp, so "claude-haiku-4-5-20251001" reads "haiku-4-5" and
+// lines up with undated ids like "opus-4-8" across sessions and sub-agents.
+export const shortModel = (m: string | null | undefined) =>
+  m?.replace(/^claude-/, "").replace(/-\d{8}$/, "");
+
 // Keep the project recognizable but short: just its last path segment
 export function shortProject(cwd: string | null) {
   if (!cwd) return "?";

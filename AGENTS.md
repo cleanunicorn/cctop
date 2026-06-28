@@ -62,6 +62,9 @@ src/app.ts      interactive runtime: runApp(). State, raw-mode input loop,
                 draw(), windowGroups(), the quit action
 src/render.ts   pure renderers over rows: buildFrame() (summary/header/groups),
                 renderDetail(), rowKey(); the column table definition lives here
+src/history.ts  pure renderer for the history dashboard (the `h` view): a
+                per-day activity bar chart + compact composition text;
+                renderHistory() over the aggregated History
 src/format.ts   formatting + ANSI helpers (visLen/pad/colors/formatMem/...)
 src/proc.ts     process-table facade: picks the platform impl at startup and
                 re-exports listAllProcesses(), cwdOf(), netCounters(), parseProcNetDev()
@@ -72,8 +75,9 @@ src/collect.ts  orchestrator: correlates the process table + session registry +
                 transcripts into Instance[]; exports collectRows(filter), matchRow()
 src/collect/    one collector per data source: sessions, usage, transcript,
                 subagents, process-tree (HOST + sub-process tree), network,
-                orphans (leftover dev-server ports); plus entry/types/paths
-                leaf helpers shared between them
+                orphans (leftover dev-server ports), history (full-scan
+                aggregator for the `h` view); plus entry/types/paths leaf
+                helpers shared between them
 ```
 
 Data flow: `proc.ts` + the session registry + transcripts → `collect.ts`
@@ -85,6 +89,19 @@ Data sources, all read-only: the OS process table (libproc/`/proc`), and — und
 transcript `projects/<dir>/<id>.jsonl` (tail only, cached by mtime), and the
 sub-agent transcripts under `<id>/subagents/`. The one file cctop *writes* is its
 own usage cache `~/.claude/cctop/usage.json` (only under `--capture-usage`).
+
+The history view (`h`, TUI-only) is the one place that full-scans *every*
+transcript under `projects/` — session files and the `<id>/subagents/` tree
+alike — rather than tailing the live ones (`collect/history.ts`); it rolls every
+assistant turn into per-day token buckets, model/tool/project tallies, and a
+per-session list (sub-agent transcripts fold onto their session via the shared
+`<id>`), caches each file's contribution in memory (keyed by mtime+size, no disk
+write — the read-only contract holds). Sub-agent turns (which are `isSidechain`)
+count toward tokens/turns but not the session tally; session files skip their own
+inline sidechain turns to avoid double counting. The view has two tabs (`↹`):
+Sessions (the recent-session table) and Stats (token/model/tool/project
+composition). The scan is fired on open and on `r` (rescan), never on the
+refresh timer.
 
 Two cross-cutting rules worth knowing before you read the code. A Claude session
 spawned by another Claude (a background job or sub-session) gets its own
