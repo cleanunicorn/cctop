@@ -40,11 +40,18 @@ export interface Tally {
   turns: number;
 }
 
+// Per-project rollup for the Projects table: like a Tally, plus how many session
+// transcripts started in that project (sub-agent files add tokens/turns but no
+// session).
+export interface ProjectStat extends Tally {
+  sessions: number;
+}
+
 export interface History {
   days: DayBucket[]; // ascending, contiguous (gaps zero-filled)
   byModel: Map<string, Tally>;
   byTool: Map<string, number>; // tool_use name -> count; + web_search/web_fetch
-  byProject: Map<string, Tally>; // key = full cwd (renderer shortens it)
+  byProject: Map<string, ProjectStat>; // key = full cwd (renderer shortens it)
   totals: {
     tokens: number;
     turns: number;
@@ -64,6 +71,7 @@ interface Contrib {
   byTool: Map<string, number>;
   byProject: Map<string, Tally>;
   firstTs: number | null; // earliest entry timestamp (ms), for sessionsStarted
+  project: string | null; // this session's project (cwd); null for sub-agent files
 }
 
 // Local-time YYYY-MM-DD. Local (not UTC) so the day/heatmap buckets line up with
@@ -95,6 +103,7 @@ function aggregateLines(lines: Iterable<string>, session = true): Contrib {
     byTool: new Map(),
     byProject: new Map(),
     firstTs: null,
+    project: null,
   };
   for (const line of lines) {
     if (!line) continue;
@@ -142,7 +151,10 @@ function aggregateLines(lines: Iterable<string>, session = true): Contrib {
 
     addTally(c.byModel, msg.model, total);
     // key by full cwd; the renderer shortens to the last path segments
-    addTally(c.byProject, e.cwd ?? "?", total);
+    const proj = e.cwd ?? "?";
+    addTally(c.byProject, proj, total);
+    // a session belongs to the project of its first counted turn
+    if (session && c.project === null) c.project = proj;
 
     const blocks = msg.content;
     if (Array.isArray(blocks))
@@ -284,8 +296,9 @@ function merge(contribs: Contrib[], subAgents: number): History {
   const days = new Map<string, DayBucket>();
   const byModel = new Map<string, Tally>();
   const byTool = new Map<string, number>();
-  const byProject = new Map<string, Tally>();
+  const byProjectTally = new Map<string, Tally>();
   const sessionsByDay = new Map<string, number>();
+  const sessionsByProject = new Map<string, number>();
 
   const mergeTally = (into: Map<string, Tally>, from: Map<string, Tally>) => {
     for (const [k, v] of from) {
@@ -311,13 +324,53 @@ function merge(contribs: Contrib[], subAgents: number): History {
       }
     }
     mergeTally(byModel, c.byModel);
-    mergeTally(byProject, c.byProject);
+    mergeTally(byProjectTally, c.byProject);
     for (const [k, n] of c.byTool) byTool.set(k, (byTool.get(k) ?? 0) + n);
     if (c.firstTs !== null) {
       const key = dateKey(new Date(c.firstTs));
       sessionsByDay.set(key, (sessionsByDay.get(key) ?? 0) + 1);
     }
+    if (c.project !== null)
+      sessionsByProject.set(
+        c.project,
+        (sessionsByProject.get(c.project) ?? 0) + 1,
+      );
   }
+
+  // A session's working directory is fixed at launch, but its sub-agents can run
+  // in a subdirectory (e.g. flux-operator/web under flux-operator), so their
+  // turns land under a child path with no session of its own. Fold each such
+  // child path into its nearest ancestor project that has activity, so one repo
+  // shows as one row instead of splitting into a parent plus 0-session subdirs.
+  const nearestAncestor = (k: string): string | null => {
+    let p = k;
+    for (let i = p.lastIndexOf("/"); i > 0; i = p.lastIndexOf("/")) {
+      p = p.slice(0, i);
+      if (byProjectTally.has(p)) return p;
+    }
+    return null;
+  };
+  for (const k of [...byProjectTally.keys()].sort(
+    (a, b) => b.length - a.length,
+  )) {
+    const par = nearestAncestor(k);
+    if (!par) continue;
+    const src = byProjectTally.get(k)!;
+    const dst = byProjectTally.get(par)!;
+    dst.tokens += src.tokens;
+    dst.turns += src.turns;
+    sessionsByProject.set(
+      par,
+      (sessionsByProject.get(par) ?? 0) + (sessionsByProject.get(k) ?? 0),
+    );
+    byProjectTally.delete(k);
+    sessionsByProject.delete(k);
+  }
+
+  // fold the session counts into the per-project tallies
+  const byProject = new Map<string, ProjectStat>();
+  for (const [k, t] of byProjectTally)
+    byProject.set(k, { ...t, sessions: sessionsByProject.get(k) ?? 0 });
 
   const keys = [...days.keys()].sort();
   const first = keys[0] ?? null;

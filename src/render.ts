@@ -25,6 +25,7 @@ import {
   RED,
   RESET,
   sanitizeDisplay,
+  shortModel,
   shortProject,
   stateDot,
   stateWord,
@@ -96,12 +97,6 @@ const safe = (s: string | null | undefined, fallback = "-") =>
 // context. Surfaced as a dim "new session" rather than a blank prompt/empty
 // blocks, so a fresh session reads as fresh instead of broken.
 const isNew = (r: Instance) => !r.prompt && !r.lastTurn && !r.contextTokens;
-
-// Model ids shown compactly: drop the "claude-" prefix and any trailing
-// -YYYYMMDD date stamp, so "claude-haiku-4-5-20251001" reads "haiku-4-5" and
-// lines up with undated ids like "opus-4-8" across sessions and sub-agents.
-const shortModel = (m: string | null | undefined) =>
-  m?.replace(/^claude-/, "").replace(/-\d{8}$/, "");
 
 // pid/mem/cpu/uptime + sanitized name of a sub-process, formatted to display
 // strings. Shared by the list-view child cells and the detail-view sub-process

@@ -163,6 +163,40 @@ describe("history merge", () => {
     expect(h.totals.tokens).toBe(17);
     expect(h.days[0].turns).toBe(2);
   });
+
+  test("tracks sessions per project and folds subdir work into the parent", () => {
+    const turn = (cwd: string, session: boolean) =>
+      H.aggregateLines(
+        [
+          JSON.stringify({
+            type: "assistant",
+            timestamp: "2026-06-20T01:00:00",
+            cwd,
+            message: {
+              model: "claude-opus-4-8",
+              usage: { input_tokens: 10 },
+              content: [],
+            },
+            ...(session ? {} : { isSidechain: true }),
+          }),
+        ],
+        session,
+      );
+    // two sessions in the repo root, plus sub-agent work in a subdirectory
+    const h = H.merge(
+      [
+        turn("/repo", true),
+        turn("/repo", true),
+        turn("/repo/web", false), // sub-agent that cd'd into a subdir
+      ],
+      1,
+    );
+    const proj = h.byProject.get("/repo")!;
+    expect(proj.sessions).toBe(2); // both session files
+    expect(proj.turns).toBe(3); // subdir turns folded in
+    expect(proj.tokens).toBe(30);
+    expect(h.byProject.has("/repo/web")).toBe(false); // not a separate row
+  });
 });
 
 describe("activity chart", () => {
@@ -180,6 +214,27 @@ describe("formatting", () => {
     expect(R.big(1500)).toBe("2k");
     expect(R.big(1_500_000)).toBe("1.5M");
     expect(R.big(2_000_000_000)).toBe("2.0B");
+  });
+
+  test("shortTool rewrites mcp ids to server:tool, passing built-ins through", () => {
+    expect(R.shortTool("Bash")).toBe("Bash");
+    expect(R.shortTool("web_search")).toBe("web_search");
+    // server collapses to its last segment; plugin_ wrapper and -mcp noise drop
+    expect(
+      R.shortTool(
+        "mcp__plugin_chrome-devtools-mcp_chrome-devtools__evaluate_script",
+      ),
+    ).toBe("chrome-devtools:evaluate_script");
+    expect(R.shortTool("mcp__bun-docs__search_bun")).toBe(
+      "bun-docs:search_bun",
+    );
+    expect(R.shortTool("mcp__claude_ai_Slack__slack_send_message")).toBe(
+      "Slack:slack_send_message",
+    );
+    // a tool name that itself contains __ keeps its tail intact
+    expect(R.shortTool("mcp__github__a__b")).toBe("github:a__b");
+    // malformed (no <server>__<tool> split) is left as the remainder
+    expect(R.shortTool("mcp__weird")).toBe("weird");
   });
 });
 
@@ -204,7 +259,14 @@ describe("renderHistory", () => {
             cache_creation_input_tokens: 200,
             output_tokens: 300,
           },
-          content: [{ type: "tool_use", name: "Bash", input: {} }],
+          content: [
+            { type: "tool_use", name: "Bash", input: {} },
+            {
+              type: "tool_use",
+              name: "mcp__plugin_chrome-devtools-mcp_chrome-devtools__evaluate_script",
+              input: {},
+            },
+          ],
         },
       }),
       aTurn("2026-06-25T02:00:00", { input_tokens: 42, output_tokens: 9 }),
@@ -214,5 +276,29 @@ describe("renderHistory", () => {
       for (const line of renderHistory(h, width))
         expect(visLen(line)).toBeLessThanOrEqual(width);
     }
+  });
+
+  test("built-in and MCP tools render in separate Tools / MCP lists", () => {
+    const c = H.aggregateLines([
+      JSON.stringify({
+        type: "assistant",
+        timestamp: "2026-06-20T01:00:00",
+        cwd: "/Users/a/proj",
+        message: {
+          model: "claude-opus-4-8",
+          usage: { input_tokens: 100 },
+          content: [
+            { type: "tool_use", name: "Bash", input: {} },
+            { type: "tool_use", name: "mcp__bun-docs__search_bun", input: {} },
+          ],
+        },
+      }),
+    ]);
+    const text = renderHistory(H.merge([c], 0), 120).join("\n");
+    expect(text).toContain("Tools");
+    expect(text).toContain("MCP");
+    // the MCP tool shows rewritten under its own list, not the raw mcp__ id
+    expect(text).toContain("bun-docs:search_bun");
+    expect(text).not.toContain("mcp__bun-docs");
   });
 });

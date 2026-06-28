@@ -1,22 +1,25 @@
 // Copyright 2026 Stefan Prodan.
 // SPDX-License-Identifier: Apache-2.0
 //
-// ANSI rendering for the session history dashboard: a per-day activity bar
-// chart as the headline graph, then compact text rows for token volume and
-// model/tool/project composition. Pure functions over an already-aggregated
-// History (collect/history.ts); the interactive runtime (app.ts) layers
+// ANSI rendering for the session history dashboard. A small header (title +
+// summary), a headline per-day activity bar chart, then titled sections for
+// token volume, model mix, tool/MCP use, and a per-project table. Every section
+// shares one look — a bold title over a thin rule — so the dashboard reads as a
+// grid of panels rather than a stack of loose blocks. Pure functions over an
+// already-aggregated History (collect/history.ts); the runtime (app.ts) layers
 // scrolling on top, exactly as it does for the detail view.
 
 import type { History } from "./collect/history.ts";
 import {
   BOLD,
+  CYAN,
   DIM,
   GREEN,
   pad,
   RESET,
+  shortModel,
   truncate,
   truncateStart,
-  truncateStyled,
   visLen,
 } from "./format.ts";
 
@@ -30,44 +33,20 @@ export function big(n: number): string {
   return String(Math.round(n));
 }
 
-const shortModel = (m: string) =>
-  m.replace(/^claude-/, "").replace(/-\d{8}$/, "");
-
-const heading = (s: string) => `${BOLD}${s}${RESET}`;
-
-// Vertical eighth-blocks for the per-day bar chart: index 1..7 are partial cells
-// (▁..▇) filling a row from the bottom; a full cell is "█".
-const VBLOCK = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇"];
-
-const HISTORY_DAYS = 30; // Claude keeps ~30 days (cleanupPeriodDays); show them all
-const CHART_H = 7; // bar-chart height in rows
-const HEAD_W = 9; // text-row heading column ("Projects" + a space)
-
-const LABEL_MAX = 16; // default name cap for the narrow (side-by-side) lists
-
-// An aligned name/value list: a bold heading on the first row, then one row per
-// item — the name in normal weight (not gray) and its value dimmed beside it.
-// Shared by the Models / Tools / Projects sections. With `width` the names fill
-// the whole row (capped to what's left after the value); `front` truncates names
-// from the left (keeping the meaningful tail, e.g. of long mcp tool ids).
-function alignedList(
-  title: string,
-  rows: { label: string; value: string }[],
-  opts: { width?: number; front?: boolean } = {},
-): string[] {
-  if (!rows.length) return [];
-  const valueW = Math.max(...rows.map((r) => visLen(r.value)));
-  const max = opts.width
-    ? Math.max(1, opts.width - HEAD_W - valueW - 2)
-    : LABEL_MAX;
-  const cut = opts.front ? truncateStart : truncate;
-  const labels = rows.map((r) => cut(r.label, max));
-  const labelW = Math.max(...labels.map(visLen));
-  return rows.map((r, i) => {
-    const head =
-      i === 0 ? `${BOLD}${pad(title, HEAD_W)}${RESET}` : " ".repeat(HEAD_W);
-    return `${head}${pad(labels[i], labelW)}  ${DIM}${pad(r.value, valueW, true)}${RESET}`;
-  });
+// MCP tool ids are mcp__<server>__<tool>; render them as <server>:<tool> with
+// the server collapsed to its last meaningful segment (dropping a leading
+// "plugin_" wrapper and the "-mcp" naming noise) so the distinctive tail stays
+// readable. Built-in tool names (Bash, Read, web_search, …) pass through.
+export function shortTool(name: string): string {
+  if (!name.startsWith("mcp__")) return name;
+  const [server, ...rest] = name.slice(5).split("__");
+  if (!rest.length) return server; // no <server>__<tool> split — leave as-is
+  const short =
+    server
+      .replace(/^plugin_/, "")
+      .split("_")
+      .at(-1) || server;
+  return `${short}:${rest.join("__")}`;
 }
 
 const pctStr = (frac: number) =>
@@ -77,11 +56,97 @@ const pctStr = (frac: number) =>
 const lastDirs = (path: string, n: number) =>
   path.split("/").filter(Boolean).slice(-n).join("/") || path;
 
+// --- section chrome ---------------------------------------------------------
+
+const MAX_W = 120; // cap the dashboard width so it doesn't stretch on wide terminals
+const COL_GAP = 4; // columns between two side-by-side sections
+const LABEL_MAX = 16; // default name cap for a stat list
+const MCP_NAME_MAX = 31; // wider cap for "server:tool" MCP names
+
+// Visible width of the widest line in a block (or its title), for sizing a
+// content-fit column.
+const blockW = (title: string, body: string[]) =>
+  Math.max(visLen(title), 0, ...body.map(visLen));
+
+// A section header: a bold title on the left, optional dim meta flushed right
+// (kept one column shy of the edge so a terminal that drops the last cell can't
+// clip it), over a thin full-width rule. Every section uses this, which is what
+// gives the dashboard its consistent paneled look.
+function sectionHead(title: string, width: number, meta = ""): string[] {
+  let head = `${BOLD}${title}${RESET}`;
+  if (meta) {
+    const g = Math.max(1, width - visLen(title) - visLen(meta) - 1);
+    head += `${" ".repeat(g)}${DIM}${meta}${RESET}`;
+  }
+  return [head, `${DIM}${"─".repeat(width)}${RESET}`];
+}
+
+// A section = its header followed by an already-rendered body. Empty body → no
+// section at all (e.g. no MCP tools), so callers don't special-case it.
+function section(
+  title: string,
+  body: string[],
+  width: number,
+  meta = "",
+): string[] {
+  if (!body.length) return [];
+  return [...sectionHead(title, width, meta), ...body];
+}
+
+// Place two rendered sections side by side: the left padded to its column width,
+// then a gap, then the right. Either side empty → just the other one.
+function twoCol(left: string[], right: string[], leftW: number): string[] {
+  if (!right.length) return left;
+  if (!left.length) return right;
+  const n = Math.max(left.length, right.length);
+  const out: string[] = [];
+  for (let i = 0; i < n; i++)
+    out.push(
+      `${pad(left[i] ?? "", leftW)}${" ".repeat(COL_GAP)}${right[i] ?? ""}`.trimEnd(),
+    );
+  return out;
+}
+
+// A name/value stat list: the name left, its value (and optional percentage)
+// right of it, aligned in columns. Values are colored by what they measure
+// (`valueColor`: green tokens, cyan shares); percentages are always cyan. Names
+// are capped to `nameCap`, and hard-capped to whatever the section width allows
+// so a row never overflows its column.
+function statRows(
+  rows: { label: string; value: string; pct?: string }[],
+  width: number,
+  opts: { valueColor?: string; nameCap?: number } = {},
+): string[] {
+  if (!rows.length) return [];
+  const valueW = Math.max(...rows.map((r) => visLen(r.value)));
+  const pctW = Math.max(0, ...rows.map((r) => visLen(r.pct ?? "")));
+  const segW = valueW + (pctW ? 2 + pctW : 0);
+  const cap = Math.min(
+    opts.nameCap ?? LABEL_MAX,
+    Math.max(1, width - segW - 2),
+  );
+  const labels = rows.map((r) => truncate(r.label, cap));
+  const labelW = Math.max(...labels.map(visLen));
+  const vc = opts.valueColor ?? "";
+  return rows.map((r, i) => {
+    const value = `${vc}${pad(r.value, valueW, true)}${RESET}`;
+    const pct = pctW ? `  ${CYAN}${pad(r.pct ?? "", pctW, true)}${RESET}` : "";
+    return `${pad(labels[i], labelW)}  ${value}${pct}`;
+  });
+}
+
 // --- the activity chart -----------------------------------------------------
+
+// Vertical eighth-blocks for the per-day bar chart: index 1..7 are partial cells
+// (▁..▇) filling a row from the bottom; a full cell is "█".
+const VBLOCK = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇"];
+
+const HISTORY_DAYS = 30; // Claude keeps ~30 days (cleanupPeriodDays); show them all
+const CHART_H = 7; // bar-chart height in rows
+const DATE_W = 5; // width of an "MM/DD" label
 
 // "MM/DD" for a YYYY-MM-DD date string (e.g. 2026-06-08 → "06/08").
 const monthDay = (date: string) => `${date.slice(5, 7)}/${date.slice(8, 10)}`;
-const DATE_W = 5; // width of an "MM/DD" label
 
 // A day's bar height in eighths of a cell (0..CHART_H*8), scaled to the busiest
 // day. A day with any activity always rounds up to at least one eighth, so a
@@ -91,12 +156,12 @@ export function barEighths(turns: number, max: number): number {
   return Math.max(1, Math.round((turns / Math.max(1, max)) * CHART_H * 8));
 }
 
-// Per-day vertical bar chart: one bar per day over the last 30 days, scaled to
-// the busiest day and drawn with eighth-block precision. This is the dashboard's
-// headline graph — sized to Claude Code's ~30-day transcript retention (see
-// cleanupPeriodDays), with a left value axis and a date axis of evenly spaced
-// MM/DD ticks below. Bars are widened to fill the available width (with a gap
-// between days) so the chart breathes, and narrowed back when space is tight.
+// Per-day vertical bar chart over the last ~30 days (Claude Code's transcript
+// retention), scaled to the busiest day with eighth-block precision. A left
+// value axis marks the peak and its half; a date axis below carries evenly
+// spaced MM/DD ticks (always including the last day). Bars widen to fill the
+// width with a gap between days, and narrow again when space is tight. Returns
+// just the chart rows — the section header supplies the title.
 function activity(h: History, width: number): string[] {
   const all = h.days.slice(-HISTORY_DAYS);
   if (!all.length) return [];
@@ -118,18 +183,14 @@ function activity(h: History, width: number): string[] {
   const stride = Math.max(1, Math.min(4, Math.floor(room / n)));
   const gap = stride >= 2 ? 1 : 0;
   const barW = stride - gap;
-  const span = n * barW + (n - 1) * gap; // total bar-area width
 
-  // Value-axis ticks: the peak at the top row, ~half at the middle, 0 at the
-  // baseline — each marked with a ┤ on the axis.
+  // Value-axis ticks: the peak at the top row, ~half at the middle, each marked
+  // with a ┤ on the axis.
   const midRow = (CHART_H - 1) >> 1;
   const yLabel = (r: number) =>
     r === 0 ? String(max) : r === midRow ? String(Math.round(max / 2)) : "";
 
-  const out = [
-    `${heading("Activity")}  ${DIM}turns / day · last ${n}d${RESET}`,
-    "",
-  ];
+  const out: string[] = [];
   for (let r = 0; r < CHART_H; r++) {
     const fromBottom = CHART_H - 1 - r; // 0 at the baseline row
     const bars = eighths
@@ -163,13 +224,15 @@ function activity(h: History, width: number): string[] {
     ticks.push(n - 1);
   }
 
-  const baseline = new Array(span).fill("─");
-  const axis = new Array(span).fill(" ");
+  // Run the baseline and date axis out to the full available width (not just the
+  // last bar) so the chart fills its panel rather than trailing off short.
+  const baseline = new Array(room).fill("─");
+  const axis = new Array(room).fill(" ");
   for (const i of ticks) {
     const c = center(i);
     baseline[c] = "┬";
     const text = monthDay(shown[i].date);
-    const s = Math.max(0, Math.min(c - (DATE_W >> 1), span - DATE_W));
+    const s = Math.max(0, Math.min(c - (DATE_W >> 1), room - DATE_W));
     for (let k = 0; k < DATE_W; k++) axis[s + k] = text[k];
   }
   out.push(`${gutter("")}${DIM}└${baseline.join("")}${RESET}`);
@@ -177,16 +240,16 @@ function activity(h: History, width: number): string[] {
   return out;
 }
 
-// --- composition (compact text) ---------------------------------------------
+// --- section bodies ---------------------------------------------------------
 
 const TOP_MODELS = 6;
 const TOP_TOOLS = 8;
 const TOP_PROJECTS = 8;
 
-// Tokens broken down as an aligned mini-table: the input total, then the three
-// input classes with their share of input (cache read is the cost signal — a
-// high read share means most input was cheap cache hits), then output.
-function tokensSection(h: History): string[] {
+// Token volume: the input total, then the three input classes with their share
+// of input (a high cache-read share means most input was cheap cache hits), then
+// output. Magnitudes green, shares cyan.
+function tokenStats(h: History, width: number): string[] {
   let fresh = 0;
   let read = 0;
   let create = 0;
@@ -198,31 +261,22 @@ function tokensSection(h: History): string[] {
     output += d.output;
   }
   const input = fresh + read + create;
-  const share = (v: number) => {
-    if (input <= 0) return "";
-    const p = (v / input) * 100;
-    return `${p >= 1 ? Math.round(p) : "<1"}%`;
-  };
-  const rows = [
-    { label: "input", value: big(input), pct: "" },
-    { label: "cache read", value: big(read), pct: share(read) },
-    { label: "cache write", value: big(create), pct: share(create) },
-    { label: "fresh", value: big(fresh), pct: share(fresh) },
-    { label: "output", value: big(output), pct: "" },
-  ];
-  const labelW = Math.max(...rows.map((r) => r.label.length));
-  const valueW = Math.max(...rows.map((r) => r.value.length));
-  const pctW = Math.max(...rows.map((r) => r.pct.length));
-  return rows.map((r, i) => {
-    const head =
-      i === 0 ? `${BOLD}${pad("Tokens", HEAD_W)}${RESET}` : " ".repeat(HEAD_W);
-    const pct = r.pct ? `  ${DIM}${pad(r.pct, pctW, true)}${RESET}` : "";
-    return `${head}${pad(r.label, labelW)} ${pad(r.value, valueW, true)}${pct}`;
-  });
+  const share = (v: number) => (input > 0 ? pctStr(v / input) : "");
+  return statRows(
+    [
+      { label: "input", value: big(input) },
+      { label: "cache read", value: big(read), pct: share(read) },
+      { label: "cache write", value: big(create), pct: share(create) },
+      { label: "fresh", value: big(fresh), pct: share(fresh) },
+      { label: "output", value: big(output) },
+    ],
+    width,
+    { valueColor: GREEN },
+  );
 }
 
-// Model mix (name + share of model tokens) as an aligned list.
-function modelsSection(h: History): string[] {
+// Model mix: each model's share of total model tokens (cyan).
+function modelStats(h: History, width: number): string[] {
   const total = [...h.byModel.values()].reduce((s, t) => s + t.tokens, 0) || 1;
   const rows = [...h.byModel.entries()]
     .sort((a, b) => b[1].tokens - a[1].tokens)
@@ -231,83 +285,166 @@ function modelsSection(h: History): string[] {
       label: shortModel(m) ?? m,
       value: pctStr(t.tokens / total),
     }));
-  return alignedList("Models", rows);
+  return statRows(rows, width, { valueColor: CYAN });
 }
 
-// Lay two rendered blocks side by side, left padded to its visible width; falls
-// back to stacking them when they wouldn't both fit the terminal width.
-function sideBySide(left: string[], right: string[], width: number): string[] {
-  const leftW = Math.max(0, ...left.map(visLen));
-  const rightW = Math.max(0, ...right.map(visLen));
-  if (!right.length) return left;
-  if (leftW + 4 + rightW > width) return [...left, "", ...right];
-  const rowsN = Math.max(left.length, right.length);
-  const out: string[] = [];
-  for (let i = 0; i < rowsN; i++) {
-    const l = left[i] ?? "";
-    const r = right[i] ?? "";
-    out.push(r ? `${pad(l, leftW)}    ${r}` : l);
-  }
-  return out;
-}
-
-// Tool-use frequency (name + call count). Full-width rows; long tool ids (mcp…)
-// are cut from the front so the distinctive tail stays visible.
-function toolsSection(h: History, width: number): string[] {
+// Tool-use frequency, ranked separately for built-in tools and MCP tools so the
+// high-volume built-ins (Bash/Read/…) don't crowd the MCP tools out of a single
+// top-N — they answer different questions (how you work vs which integrations
+// you lean on). MCP names are rewritten to "server:tool" with a wider cap.
+function toolStats(h: History, mcp: boolean, width: number): string[] {
   const rows = [...h.byTool.entries()]
+    .filter(([n]) => n.startsWith("mcp__") === mcp)
     .sort((a, b) => b[1] - a[1])
     .slice(0, TOP_TOOLS)
-    .map(([name, n]) => ({ label: name, value: String(n) }));
-  return alignedList("Tools", rows, { width, front: true });
+    .map(([name, n]) => ({
+      label: mcp ? shortTool(name) : name,
+      value: String(n),
+    }));
+  return statRows(rows, width, mcp ? { nameCap: MCP_NAME_MAX } : {});
 }
 
-// Per-project token volume. Full-width rows; the project is named by its last
-// two path segments, cut from the front if still too long.
-function projectsSection(h: History, width: number): string[] {
-  const rows = [...h.byProject.entries()]
+// Per-project breakdown as a top-style table: right-aligned Sessions / Tokens /
+// Turns columns under dim headers, then a Project column sized to its content
+// (named by its last two path segments, cut from the front if it would overflow
+// the frame). Tokens green, like everywhere else.
+function projectsTable(h: History, width: number): string[] {
+  const data = [...h.byProject.entries()]
     .sort((a, b) => b[1].tokens - a[1].tokens)
     .slice(0, TOP_PROJECTS)
-    .map(([p, t]) => ({ label: lastDirs(p, 2), value: big(t.tokens) }));
-  return alignedList("Projects", rows, { width, front: true });
-}
+    .map(([p, t]) => ({
+      sessions: String(t.sessions),
+      tokens: big(t.tokens),
+      turns: big(t.turns),
+      project: lastDirs(p, 2),
+    }));
+  if (!data.length) return [];
 
-function composition(h: History, width: number): string[] {
-  // Tokens | Models sit in parallel columns; Tools and Projects each take a
-  // full-width block (their names are long).
-  return [
-    ...sideBySide(tokensSection(h), modelsSection(h), width),
-    "",
-    ...toolsSection(h, width),
-    "",
-    ...projectsSection(h, width),
+  type Row = (typeof data)[number];
+  const cols: {
+    header: string;
+    get: (r: Row) => string;
+    right: boolean;
+    color: string;
+  }[] = [
+    { header: "Sessions", get: (r) => r.sessions, right: true, color: "" },
+    { header: "Tokens", get: (r) => r.tokens, right: true, color: GREEN },
+    { header: "Turns", get: (r) => r.turns, right: true, color: "" },
+    { header: "Project", get: (r) => r.project, right: false, color: "" },
   ];
+
+  // Every column sizes to its header/values; the Project column is only capped
+  // (never expanded) to the space left in the frame, truncating from the front.
+  const widths = cols.map((c) =>
+    Math.max(c.header.length, ...data.map((r) => visLen(c.get(r)))),
+  );
+  const lead =
+    widths.slice(0, -1).reduce((a, b) => a + b, 0) + 2 * (cols.length - 1);
+  widths[widths.length - 1] = Math.min(
+    widths[widths.length - 1],
+    Math.max(8, width - lead),
+  );
+
+  const cell = (text: string, i: number, color: string) =>
+    `${color}${pad(i === cols.length - 1 ? truncateStart(text, widths[i]) : text, widths[i], cols[i].right)}${color ? RESET : ""}`;
+
+  const out = [
+    `${DIM}${cols.map((c, i) => pad(c.header, widths[i], c.right)).join("  ")}${RESET}`,
+  ];
+  for (const r of data)
+    out.push(cols.map((c, i) => cell(c.get(r), i, c.color)).join("  "));
+  return out;
 }
 
 // --- entry point ------------------------------------------------------------
 
 export function renderHistory(h: History, termCols: number): string[] {
-  const width = Math.max(termCols, 20);
+  // Cap the frame so the dashboard stays compact on a wide terminal rather than
+  // stretching edge to edge.
+  const W = Math.min(Math.max(termCols, 20), MAX_W);
   if (!h.days.length) {
     return [
-      heading("Session history"),
+      `${BOLD}Session history${RESET}`,
       "",
       `${DIM}No transcript history found under ~/.claude/projects${RESET}`,
     ];
   }
+
   const t = h.totals;
+  const parts: [string, string, string][] = [
+    [big(t.tokens), "tokens", GREEN],
+    [big(t.turns), "turns", BOLD],
+    [String(t.sessions), "sessions", BOLD],
+    [String(t.subAgents), "sub-agents", BOLD],
+  ];
+  const summaryColored = parts
+    .map(([v, unit, c]) => `${c}${v}${RESET} ${DIM}${unit}${RESET}`)
+    .join(` ${DIM}·${RESET} `);
+  const summaryPlain = parts.map(([v, unit]) => `${v} ${unit}`).join(" · ");
+  // fall back to a plain (still dim) strip when the colored one can't fit
   const summary =
-    `${big(t.tokens)} tokens ${DIM}·${RESET} ${big(t.turns)} turns ` +
-    `${DIM}·${RESET} ${t.sessions} sessions ${DIM}·${RESET} ${t.subAgents} sub-agents`;
+    visLen(summaryColored) <= W
+      ? summaryColored
+      : `${DIM}${truncate(summaryPlain, W)}${RESET}`;
+
+  // header: title (with day span) over a heavy rule, then the summary strip
+  const [titleLine] = sectionHead(
+    "Session history",
+    W,
+    `last ${h.days.length} days`,
+  );
+  // The chart has its own axes, so it gets just an inline title (no rule above
+  // it — a divider there reads as a heavy ceiling over the graph).
   const out: string[] = [
-    heading("Session history"),
+    titleLine,
+    "━".repeat(W),
+    summary,
     "",
-    truncateStyled(summary, width),
+    `${BOLD}Activity${RESET}  ${DIM}turns per day${RESET}`,
+    ...activity(h, W),
     "",
   ];
-  out.push(...activity(h, width), "");
-  out.push(...composition(h, width));
+
+  // The four small lists pair up Tokens|Models and Tools|MCP. Each column is
+  // sized to its own content (not half the frame) so the two cards sit close
+  // together; the left/right cards share a column width so they line up. They
+  // stack only when even content-sized columns wouldn't fit side by side.
+  const tokens = tokenStats(h, W);
+  const models = modelStats(h, W);
+  const tools = toolStats(h, false, W);
+  const mcp = toolStats(h, true, W);
+  const leftW = Math.max(blockW("Tokens", tokens), blockW("Tools", tools));
+  const rightW = Math.max(blockW("Models", models), blockW("MCP", mcp));
+
+  if (leftW + COL_GAP + rightW <= W) {
+    out.push(
+      ...twoCol(
+        section("Tokens", tokens, leftW),
+        section("Models", models, rightW),
+        leftW,
+      ),
+      "",
+      ...twoCol(
+        section("Tools", tools, leftW),
+        section("MCP", mcp, rightW),
+        leftW,
+      ),
+      "",
+    );
+  } else {
+    for (const s of [
+      section("Tokens", tokens, leftW),
+      section("Models", models, rightW),
+      section("Tools", tools, leftW),
+      section("MCP", mcp, rightW),
+    ])
+      if (s.length) out.push(...s, "");
+  }
+
+  const projects = projectsTable(h, W);
+  out.push(...section("Projects", projects, blockW("Projects", projects)));
   return out;
 }
 
 // Exported for tests only.
-export const __test = { big, barEighths };
+export const __test = { big, barEighths, shortTool };
