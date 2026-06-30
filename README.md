@@ -57,11 +57,20 @@ You can now run it with `cctop` in your terminal.
 
 ### Update
 
-Pull the latest version with:
+Uninstall, then reinstall to pull the latest version:
 
 ```sh
-bun install -g github:stefanprodan/cctop --force
+bun uninstall -g cctop
+bun install -g github:stefanprodan/cctop
 ```
+
+Updating in place (`bun install -g ... --force`, or pinning a `#vX.Y.Z` tag over
+an already-installed copy) can fail with `error: ... has a dependency loop
+(DependencyLoop)`. This is an upstream Bun bug
+([oven-sh/bun#20647](https://github.com/oven-sh/bun/issues/20647), fix in
+[#32760](https://github.com/oven-sh/bun/pull/32760)) in how it re-resolves a
+git-sourced global package that's already installed at a different commit — not
+a problem with cctop's manifest. Uninstalling first avoids it.
 
 ### Uninstall
 
