@@ -39,6 +39,45 @@ printf '%s' "$input" | cctop --capture-usage || true
 # ... the rest of your status-line rendering, using "$input" ...
 ```
 
+### A complete example script
+
+If you don't have a status-line script at all, here's a self-contained
+`~/.claude/statusline.sh` to start from. It runs the tap, then renders a compact
+`model · dir · git:branch` line (requires `jq`); trim or replace the rendering to
+taste — the only line cctop needs is the `cctop --capture-usage` tap.
+
+```bash
+#!/usr/bin/env bash
+# Claude Code status line, with the cctop usage-limits tap.
+# Claude Code pipes a JSON payload to this command on stdin once per turn;
+# whatever we print to stdout becomes the rendered status line.
+
+input=$(cat)
+
+# persist the account-wide 5h/7d rate limits for cctop (best-effort; the
+# `|| true` keeps a missing/failed cctop from tripping a status line under `set -e`)
+printf '%s' "$input" | cctop --capture-usage || true
+
+# --- render the status line (stdout is the rendered text) ---
+model=$(printf '%s' "$input" | jq -r '.model.display_name // empty')
+dir=$(printf '%s' "$input" | jq -r '.workspace.current_dir // .cwd // empty')
+dir_name=""
+[ -n "$dir" ] && dir_name=$(basename "$dir")
+
+branch=""
+if [ -n "$dir" ] && git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  branch=$(git -C "$dir" branch --show-current 2>/dev/null)
+fi
+
+line="$model"
+[ -n "$dir_name" ] && line="$line · $dir_name"
+[ -n "$branch" ] && line="$line · git:$branch"
+printf '%s' "$line"
+```
+
+Make it executable (`chmod +x ~/.claude/statusline.sh`) and point
+`settings.json` at it as shown above.
+
 The`cctop --capture-usage` reads the payload on stdin and
 writes the snapshot; the `|| true` keeps a missing or failed `cctop` from
 tripping a status line that runs under `set -e`.
