@@ -120,8 +120,9 @@ if (capture) {
     console.error(
       "cctop --capture-usage: nothing captured — no status-line payload on stdin.\n" +
         "This flag reads the JSON Claude Code pipes to a status-line command and is\n" +
-        "meant to be wired into one, not run directly. See docs/usage-limits.md for\n" +
-        "the setup; without it cctop simply omits the Limits: line.",
+        "meant to be wired into one, not run directly. See the setup at\n" +
+        "https://github.com/stefanprodan/cctop/blob/main/docs/usage-limits.md —\n" +
+        "without it cctop simply omits the Limits: line.",
     );
     process.exit(0);
   }
