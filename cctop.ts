@@ -111,7 +111,21 @@ for (let i = 0; i < args.length; i++) {
 // stdin, persist its rate limits for the summary, then exit. Prints nothing (a
 // status line's stdout becomes its rendered text) and never fails the caller.
 if (capture) {
-  if (!process.stdin.isTTY) await captureUsage(await Bun.stdin.text());
+  if (process.stdin.isTTY) {
+    // Run by hand on a terminal rather than wired into a status-line command:
+    // there is no payload on stdin, so nothing is captured and the summary's
+    // Limits: line stays hidden. Silently exiting here reads as "broken", so
+    // explain how the tap is meant to be hooked up. (Warn on stderr only — the
+    // hook itself never hits this branch, so the silent-stdout contract holds.)
+    console.error(
+      "cctop --capture-usage: nothing captured — no status-line payload on stdin.\n" +
+        "This flag reads the JSON Claude Code pipes to a status-line command and is\n" +
+        "meant to be wired into one, not run directly. See docs/usage-limits.md for\n" +
+        "the setup; without it cctop simply omits the Limits: line.",
+    );
+    process.exit(0);
+  }
+  await captureUsage(await Bun.stdin.text());
   process.exit(0);
 }
 
