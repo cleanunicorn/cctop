@@ -43,8 +43,14 @@ printf '%s' "$input" | cctop --capture-usage || true
 
 If you don't have a status-line script at all, here's a self-contained
 `~/.claude/statusline.sh` to start from. It runs the tap, then renders a compact
-`model · dir · git:branch` line (requires `jq`); trim or replace the rendering to
-taste — the only line cctop needs is the `cctop --capture-usage` tap.
+`model · dir · git:branch` line; trim or replace the rendering to taste — the
+only line cctop needs is the `cctop --capture-usage` tap.
+
+> **Requires [`jq`](https://jqlang.github.io/jq/).** Only the *rendering* below
+> uses it (to read fields out of the stdin payload); cctop itself stays
+> dependency-free and the tap never needs `jq`. Install it with
+> `brew install jq` (macOS) or `apt install jq` (Debian/Ubuntu), or drop the
+> `jq` lines and print your own status text instead.
 
 ```bash
 #!/usr/bin/env bash
