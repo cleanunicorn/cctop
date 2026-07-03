@@ -21,6 +21,14 @@ interface Session {
 
 export type { Session };
 
+// The largest epoch offset a Date can represent (ECMA-262 §21.4.1.1). A
+// timestamp beyond it — e.g. a nanosecond-epoch value from a corrupted
+// registry entry — would make new Date(ms).toISOString() throw downstream
+// and kill the refresh loop, so such entries are rejected here.
+const MAX_EPOCH_MS = 8.64e15;
+const saneEpochMs = (value: unknown): boolean =>
+  typeof value === "number" && value > 0 && value <= MAX_EPOCH_MS;
+
 // ~/.claude/sessions/<pid>.json is written by each running Claude Code:
 // { pid, sessionId, cwd, startedAt, version, kind, status, updatedAt, name }
 export function validSession(raw: any, file: string): Session | null {
@@ -32,7 +40,10 @@ export function validSession(raw: any, file: string): Session | null {
     raw.sessionId.length === 0 ||
     typeof raw.cwd !== "string" ||
     raw.cwd.length === 0 ||
-    !Number.isFinite(raw.startedAt)
+    !saneEpochMs(raw.startedAt) ||
+    // A numeric updatedAt outside the Date range marks the file as corrupted;
+    // non-numeric values still just normalize to undefined below.
+    (Number.isFinite(raw.updatedAt) && !saneEpochMs(raw.updatedAt))
   ) {
     return null;
   }

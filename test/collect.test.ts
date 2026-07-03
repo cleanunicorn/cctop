@@ -148,6 +148,47 @@ describe("collect helpers", () => {
     ).toBeNull();
   });
 
+  test("rejects out-of-range session registry timestamps", () => {
+    // Nanosecond-epoch updatedAt (corrupted registry) would make
+    // new Date(ms).toISOString() throw and kill the refresh loop.
+    expect(
+      __test.validSession(
+        {
+          pid: 12345,
+          sessionId: "session-1",
+          cwd: "/tmp/project",
+          startedAt: 1_700_000_000_000,
+          updatedAt: 1_700_000_000_000_000_000,
+        },
+        "12345.json",
+      ),
+    ).toBeNull();
+    expect(
+      __test.validSession(
+        {
+          pid: 12345,
+          sessionId: "session-1",
+          cwd: "/tmp/project",
+          startedAt: -1_700_000_000_000,
+        },
+        "12345.json",
+      ),
+    ).toBeNull();
+    // A sane pair of timestamps must still pass.
+    expect(
+      __test.validSession(
+        {
+          pid: 12345,
+          sessionId: "session-1",
+          cwd: "/tmp/project",
+          startedAt: 1_700_000_000_000,
+          updatedAt: 1_700_000_010_000,
+        },
+        "12345.json",
+      ),
+    ).not.toBeNull();
+  });
+
   test("normalizes optional session registry fields", () => {
     expect(
       __test.validSession(

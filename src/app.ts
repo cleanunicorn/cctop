@@ -236,6 +236,14 @@ export async function runApp(opts: AppOptions): Promise<void> {
       state.rows = await collectRows(null); // collect all; filter in-app
       state.usage = await readUsage(); // cheap single-file read; refresh alongside
       state.net = netThroughput(Date.now()); // delta vs the previous refresh
+    } catch (e: any) {
+      // The timer fires refresh() bare, so an escaping rejection would kill
+      // the whole process (Bun treats it as unhandled). Keep the last good
+      // frame and surface the failure on the status line instead.
+      flash(
+        `could not refresh sessions: ${sanitizeDisplay(e?.message ?? "failed")}`,
+        RED,
+      );
     } finally {
       refreshing = false;
     }
