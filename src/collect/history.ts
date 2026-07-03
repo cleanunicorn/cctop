@@ -96,6 +96,24 @@ const dateKey = (d: Date) => {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 };
 
+// Sanity window for transcript timestamps. merge() fills day buckets
+// contiguously from the earliest to the latest key, so a single corrupted line
+// with a far-future timestamp (e.g. "9999-12-31") would allocate millions of
+// DayBuckets — and a 5-digit year would defeat the lexicographic `<= last`
+// guard entirely and hang the fill loop. Claude Code postdates 2020, and
+// anything meaningfully past "now" can't be real, so reject both ends here at
+// parse time. The future bound allows a couple of days of clock skew.
+const MIN_TS = Date.parse("2020-01-01T00:00:00Z");
+const FUTURE_SLACK_MS = 2 * 24 * 60 * 60 * 1000;
+
+// Parse an entry timestamp, returning NaN for anything missing, malformed, or
+// outside the sane window (NaN from Date.parse fails both comparisons).
+const parseTs = (raw: unknown, now: number): number => {
+  if (typeof raw !== "string") return Number.NaN;
+  const ts = Date.parse(raw);
+  return ts >= MIN_TS && ts <= now + FUTURE_SLACK_MS ? ts : Number.NaN;
+};
+
 const addTally = (m: Map<string, Tally>, key: string, tokens: number) => {
   const t = m.get(key);
   if (t) {
@@ -111,7 +129,11 @@ const addTally = (m: Map<string, Tally>, key: string, tokens: number) => {
 // are counted from the sub-agent files instead, avoiding double counting) and
 // record the first-seen day for the session tally; a sub-agent file (session
 // false) counts its sidechain turns and starts no session.
-function aggregateLines(lines: Iterable<string>, session = true): Contrib {
+function aggregateLines(
+  lines: Iterable<string>,
+  session = true,
+  now = Date.now(),
+): Contrib {
   const c: Contrib = {
     days: new Map(),
     byModel: new Map(),
@@ -129,7 +151,7 @@ function aggregateLines(lines: Iterable<string>, session = true): Contrib {
     } catch {
       continue; // half-written or malformed line
     }
-    const ts = e.timestamp ? Date.parse(e.timestamp) : Number.NaN;
+    const ts = parseTs(e.timestamp, now);
     if (session && !Number.isNaN(ts)) {
       if (c.firstTs === null || ts < c.firstTs) c.firstTs = ts;
       if (c.lastTs === null || ts > c.lastTs) c.lastTs = ts;
@@ -140,7 +162,7 @@ function aggregateLines(lines: Iterable<string>, session = true): Contrib {
     const msg = e.message;
     const u = msg?.usage;
     if (!u || !msg.model || msg.model === "<synthetic>") continue;
-    if (Number.isNaN(ts)) continue; // can't bucket a turn with no timestamp
+    if (Number.isNaN(ts)) continue; // can't bucket a turn with no sane timestamp
 
     const inputFresh = u.input_tokens ?? 0;
     const cacheRead = u.cache_read_input_tokens ?? 0;
@@ -400,13 +422,18 @@ function merge(
   const first = keys[0] ?? null;
   const last = keys[keys.length - 1] ?? null;
 
+  // Belt and braces alongside the parseTs window: if a bogus day key ever
+  // slips in, never fill more than ~30 years of buckets — past that the data
+  // is corruption, not history, and an unbounded loop here is a hang/OOM.
+  const MAX_FILL_DAYS = 366 * 30;
+
   const filled: DayBucket[] = [];
   let totalTokens = 0;
   let totalTurns = 0;
   if (first && last) {
     const [fy, fm, fd] = first.split("-").map(Number);
     const cursor = new Date(fy, fm - 1, fd); // local; setDate handles DST/rollover
-    while (dateKey(cursor) <= last) {
+    while (filled.length < MAX_FILL_DAYS && dateKey(cursor) <= last) {
       const key = dateKey(cursor);
       const d = days.get(key) ?? {
         date: key,

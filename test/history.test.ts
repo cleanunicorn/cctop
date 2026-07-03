@@ -115,6 +115,77 @@ describe("history aggregation", () => {
   });
 });
 
+describe("timestamp clamping", () => {
+  // fixed "now" (local, like aTurn) so the skew-tolerance bound is deterministic
+  const NOW = Date.parse("2026-07-01T12:00:00");
+
+  test("ignores a far-future timestamp so merge never balloons", () => {
+    const c = H.aggregateLines(
+      [
+        aTurn("2026-06-20T01:00:00", { input_tokens: 10 }),
+        aTurn("9999-12-31T00:00:00", { input_tokens: 99 }),
+      ],
+      true,
+      NOW,
+    );
+    expect([...c.days.keys()]).toEqual(["2026-06-20"]);
+    const h = H.merge([c], 0);
+    expect(h.days.length).toBe(1); // no multi-millennium gap fill
+    expect(h.totals.tokens).toBe(10);
+    expect(h.totals.lastDay).toBe("2026-06-20");
+  });
+
+  test("rejects a 5-digit-year timestamp (would hang the fill loop)", () => {
+    // Date.parse accepts extended years up to +275760; the lexicographic
+    // `dateKey(cursor) <= last` guard in merge mis-orders 5-digit keys, so
+    // without the clamp this line makes the fill loop run effectively forever.
+    const c = H.aggregateLines(
+      [
+        aTurn("2026-06-20T01:00:00", { input_tokens: 10 }),
+        aTurn("+099999-01-01T00:00:00Z", { input_tokens: 5 }),
+      ],
+      true,
+      NOW,
+    );
+    expect(c.days.size).toBe(1);
+    expect(H.merge([c], 0).days.length).toBe(1);
+  });
+
+  test("a slightly-skewed future timestamp within tolerance still counts", () => {
+    const c = H.aggregateLines(
+      [aTurn("2026-07-02T12:00:00", { input_tokens: 3 })], // now + 1 day
+      true,
+      NOW,
+    );
+    expect(c.days.get("2026-07-02")!.turns).toBe(1);
+  });
+
+  test("rejects pre-2020 timestamps (epoch-zero style corruption)", () => {
+    const c = H.aggregateLines(
+      [aTurn("1970-01-01T00:00:01", { input_tokens: 3 })],
+      true,
+      NOW,
+    );
+    expect(c.days.size).toBe(0);
+    expect(c.firstTs).toBeNull(); // no bogus session start either
+  });
+
+  test("merge caps the contiguous fill span even if a bogus day slips in", () => {
+    // push "now" out so the far-future turn survives aggregation, exercising
+    // the belt-and-braces cap in merge itself
+    const c = H.aggregateLines(
+      [
+        aTurn("2026-06-20T01:00:00", { input_tokens: 1 }),
+        aTurn("9999-12-31T00:00:00", { input_tokens: 1 }),
+      ],
+      true,
+      Date.parse("9999-12-31T00:00:00"),
+    );
+    const h = H.merge([c], 0);
+    expect(h.days.length).toBeLessThanOrEqual(366 * 30);
+  });
+});
+
 describe("history merge", () => {
   test("gap-fills days, folds in session starts, and totals", () => {
     const c1 = H.aggregateLines([
