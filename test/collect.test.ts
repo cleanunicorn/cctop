@@ -748,6 +748,26 @@ describe("host resolution", () => {
   });
 });
 
+// isAgentCmd flags a resolved sub-process command as a cross-provider agent
+// CLI (copilot, gemini, codex, …) — only the leaf of a "shell › cmd" chain
+// counts, since that's the command doing the work.
+describe("agent CLI detection", () => {
+  test("matches known agent CLIs, bare or at the end of a chain", () => {
+    for (const cmd of ["copilot", "kiro", "gemini", "codex", "opencode"])
+      expect(__test.isAgentCmd(cmd)).toBe(true);
+    expect(__test.isAgentCmd("bash › copilot")).toBe(true);
+    expect(__test.isAgentCmd("bash › npx › gemini")).toBe(true);
+    expect(__test.isAgentCmd("Copilot")).toBe(true); // case-insensitive
+  });
+
+  test("does not match non-agents or agents that are not the leaf", () => {
+    expect(__test.isAgentCmd("node server.js")).toBe(false);
+    expect(__test.isAgentCmd("bash › make › go")).toBe(false);
+    // the leaf must be the agent itself, not a tool an agent-named wrapper ran
+    expect(__test.isAgentCmd("copilot-language-server")).toBe(false);
+  });
+});
+
 // subprocsOf walks a session's children into the sub-process rows shown beneath
 // it: descending through wrapping shells and build/task runners to the real
 // tool command, dropping idle shells, and excluding nested Claude sessions

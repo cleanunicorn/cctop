@@ -23,6 +23,7 @@ import {
   descendants,
   hostApp,
   indexChildren,
+  isAgentCmd,
   isClaudeProc,
   pruneCpuSamples,
   subprocsOf,
@@ -84,6 +85,7 @@ export const __test = {
   attachSubagentsInOrder,
   hostApp,
   cpuPercent,
+  isAgentCmd,
   isClaudeProc,
   versionFromPath,
   indexChildren,
@@ -202,6 +204,7 @@ export async function collectRows(filter: string | null): Promise<Instance[]> {
             cpu: cpuPercent(c, nowMs),
             uptimeSec: c.startSec ? nowMs / 1000 - c.startSec : 0,
             ports: portsFor(c.pid),
+            agent: isAgentCmd(c.name),
           })),
         orphanPorts: [], // filled after all rows are known (attribution by cwd)
       };
