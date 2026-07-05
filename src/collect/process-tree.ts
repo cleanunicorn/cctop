@@ -78,6 +78,12 @@ const AGENT_CLIS = new Set([
   "crush",
   "auggie",
   "qwen",
+  "openhands",
+  "cline",
+  "jules",
+  "devin",
+  "plandex",
+  "codebuff",
 ]);
 
 // Whether a resolved sub-process command (possibly a "bash › copilot" chain)

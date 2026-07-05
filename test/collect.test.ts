@@ -768,6 +768,40 @@ describe("agent CLI detection", () => {
   });
 });
 
+// effectiveState flips a session to busy while a delegated agent CLI runs in
+// its sub-process tree: the session is waiting on that agent, its job is not
+// done, so it must not read idle (red).
+describe("effective session state", () => {
+  const child = (name: string, agent: boolean) => ({
+    pid: 1,
+    name,
+    mem: 0,
+    cpu: 0,
+    uptimeSec: 0,
+    ports: [],
+    agent,
+  });
+
+  test("a running agent child flips any non-busy status to busy", () => {
+    expect(__test.effectiveState("idle", [child("bash › copilot", true)])).toBe(
+      "busy",
+    );
+    expect(__test.effectiveState("waiting", [child("gemini", true)])).toBe(
+      "busy",
+    );
+    expect(__test.effectiveState(undefined, [child("codex", true)])).toBe(
+      "busy",
+    );
+  });
+
+  test("without an agent child the registry status stands", () => {
+    expect(__test.effectiveState("idle", [child("node", false)])).toBe("idle");
+    expect(__test.effectiveState("busy", [])).toBe("busy");
+    expect(__test.effectiveState(undefined, [])).toBe("?");
+    expect(__test.effectiveState(null, [child("make", false)])).toBe("?");
+  });
+});
+
 // subprocsOf walks a session's children into the sub-process rows shown beneath
 // it: descending through wrapping shells and build/task runners to the real
 // tool command, dropping idle shells, and excluding nested Claude sessions
