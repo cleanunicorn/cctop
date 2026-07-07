@@ -1126,22 +1126,31 @@ describe("persisted settings (settings.json)", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  const empty = { watchSecs: null, sort: null };
+  const empty = { watchSecs: null, sort: null, notify: null };
 
   test("parseSettings nulls missing or ill-typed fields", () => {
-    expect(__test.parseSettings({ watchSecs: 2.5, sort: "cpu" })).toEqual({
+    expect(
+      __test.parseSettings({ watchSecs: 2.5, sort: "cpu", notify: true }),
+    ).toEqual({
       watchSecs: 2.5,
       sort: "cpu",
+      notify: true,
     });
     expect(__test.parseSettings({})).toEqual(empty);
     expect(__test.parseSettings(null)).toEqual(empty);
     expect(
-      __test.parseSettings({ watchSecs: "2", sort: 5 }), // wrong types
+      // wrong types
+      __test.parseSettings({ watchSecs: "2", sort: 5, notify: "yes" }),
     ).toEqual(empty);
     expect(
       __test.parseSettings({ watchSecs: -1, sort: "" }), // out of range / empty
     ).toEqual(empty);
     expect(__test.parseSettings({ watchSecs: Number.NaN })).toEqual(empty);
+    // false is a real value, not "unset"
+    expect(__test.parseSettings({ notify: false })).toEqual({
+      ...empty,
+      notify: false,
+    });
   });
 
   test("save/read round-trips and merges partial patches", async () => {
@@ -1161,6 +1170,13 @@ describe("persisted settings (settings.json)", () => {
       watchSecs: 0.5,
       sort: "mem",
     });
+    // the notify toggle persists both ways and survives unrelated patches
+    await saveSettings({ notify: true }, f);
+    expect((await readSettings(f)).notify).toBe(true);
+    await saveSettings({ sort: "cpu" }, f);
+    expect((await readSettings(f)).notify).toBe(true);
+    await saveSettings({ notify: false }, f);
+    expect((await readSettings(f)).notify).toBe(false);
   });
 
   test("missing or corrupt file reads as defaults", async () => {

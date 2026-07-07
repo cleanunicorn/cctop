@@ -60,7 +60,7 @@ Runs as an interactive TUI on a terminal; prints once when piped or --once.
 
 \x1b[1mKeys (interactive):\x1b[0m
   ↑/k ↓/j  move      enter  detail     /  filter    s  sort
-  x        quit session (confirm)      ?  help      q  quit cctop
+  x        quit session (confirm)      n  notify    ?  help    q  quit cctop
 
 \x1b[1mExamples:\x1b[0m
   cctop                  # live TUI
@@ -187,6 +187,7 @@ if (asJson) {
     filter,
     watchSecs: watchSecs ?? persisted ?? DEFAULT_WATCH_SECS,
     sort: settings.sort,
+    notify: settings.notify ?? false,
     version: VERSION,
   });
 }
