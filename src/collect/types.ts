@@ -12,6 +12,7 @@ export interface SubProc {
   cpu: number;
   uptimeSec: number;
   ports: number[]; // listening TCP ports this process owns (usually empty)
+  agent: boolean; // a cross-provider agent CLI (copilot, gemini, codex, …)
 }
 
 // A listening server reparented to init (its starting parent has exited) whose

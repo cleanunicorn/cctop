@@ -3,7 +3,15 @@
 
 import { describe, expect, test } from "bun:test";
 import type { Instance, Usage } from "../src/collect.ts";
-import { BLUE, BOLD, RED, RESET, stripAnsi, YELLOW } from "../src/format.ts";
+import {
+  BLUE,
+  BOLD,
+  CYAN,
+  RED,
+  RESET,
+  stripAnsi,
+  YELLOW,
+} from "../src/format.ts";
 import {
   buildFrame,
   renderDetail,
@@ -58,6 +66,7 @@ describe("render helpers", () => {
               cpu: 1.5,
               uptimeSec: 10,
               ports: [5173],
+              agent: false,
             },
           ],
           subagents: [
@@ -106,6 +115,7 @@ describe("render helpers", () => {
       cpu: 0.1,
       uptimeSec: 120,
       ports: [],
+      agent: false,
     }));
     const row = baseRow({ subagents, children });
 
@@ -131,6 +141,52 @@ describe("render helpers", () => {
     expect(detail).toContain("│"); // quoted blocks get a left gutter
   });
 
+  test("marks a cross-provider agent child live and cyan in list and detail", () => {
+    const row = baseRow({
+      children: [
+        {
+          pid: 22222,
+          name: "bash › copilot",
+          mem: 256 * 1024 * 1024,
+          cpu: 3.2,
+          uptimeSec: 45,
+          ports: [],
+          agent: true,
+        },
+        {
+          pid: 22223,
+          name: "bash › go test",
+          mem: 64 * 1024 * 1024,
+          cpu: 1.0,
+          uptimeSec: 12,
+          ports: [],
+          agent: false,
+        },
+      ],
+    });
+
+    const lines = buildFrame([row], 160).groups[0].lines;
+    const agentRow = lines.find((l) => l.includes("copilot"))!;
+    const plainRow = lines.find((l) => l.includes("go test"))!;
+    // the agent child keeps the dim branch but its stats + name are cyan,
+    // like the sub-agent rows — no status dot on the command line
+    expect(agentRow).toContain(CYAN);
+    expect(agentRow).not.toContain("●");
+    expect(stripAnsi(agentRow)).toContain("22222");
+    // an ordinary sub-process stays fully dim
+    expect(plainRow).not.toContain("●");
+    expect(plainRow).not.toContain(CYAN);
+
+    const detail = renderDetail(row, 120);
+    const agentDetail = detail.find((l) => l.includes("copilot"))!;
+    const plainDetail = detail.find((l) => l.includes("go test"))!;
+    // detail keeps just the cyan name — no dot in front of the command
+    expect(agentDetail).toContain(CYAN);
+    expect(agentDetail).not.toContain("●");
+    expect(plainDetail).not.toContain("●");
+    expect(plainDetail).not.toContain(CYAN);
+  });
+
   test("detail view lists a sub-process's listening ports", () => {
     const row = baseRow({
       children: [
@@ -141,6 +197,7 @@ describe("render helpers", () => {
           cpu: 2.0,
           uptimeSec: 30,
           ports: [3000, 8080],
+          agent: false,
         },
         {
           pid: 12347,
@@ -149,6 +206,7 @@ describe("render helpers", () => {
           cpu: 0,
           uptimeSec: 5,
           ports: [],
+          agent: false,
         },
       ],
     });
@@ -187,6 +245,7 @@ describe("render helpers", () => {
               cpu: 0,
               uptimeSec: 1,
               ports: [],
+              agent: false,
             },
           ],
           subagents: [

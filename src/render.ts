@@ -110,6 +110,7 @@ const subProcCells = (c: SubProc) => ({
   up: formatDuration(c.uptimeSec),
   name: safe(c.name),
   ports: c.ports,
+  agent: c.agent,
 });
 
 // listening ports joined for display: ":3000 :8080". The one place the port
@@ -328,7 +329,9 @@ export function buildFrame(
 
   // a sub-process row: a tree branch in the state gutter, then pid/mem/cpu/up
   // aligned under the session's columns, then the command name and any listening
-  // ports; the row (bar the green ports) is dimmed so sessions stay the focus
+  // ports; the row (bar the green ports) is dimmed so sessions stay the focus.
+  // A cross-provider agent CLI (copilot, gemini, codex, …) is a delegated agent
+  // at work, not background noise: its row is cyan like the sub-agent rows.
   const childLine = (c: ChildRow, isLast: boolean) => {
     const branch = pad(isLast ? "└─" : "├─", widths[stateI]);
     const stats = TREE_COLS.map((key) => {
@@ -338,6 +341,8 @@ export function buildFrame(
     const head = `${branch}  ${stats}  `;
     const tail = portTail(c.ports);
     const room = Math.max(termCols - visLen(head) - visLen(tail), 8);
+    if (c.agent)
+      return `${DIM}${branch}${RESET}  ${CYAN}${stats}  ${truncate(c.name, room)}${RESET}${tail}`;
     return `${DIM}${head}${truncate(c.name, room)}${RESET}${tail}`;
   };
 
@@ -714,7 +719,13 @@ export function renderDetail(
       // around them rather than over them
       const tail = portTail(c.ports);
       const room = Math.max(width - stats.length - 2 - visLen(tail), 8);
-      out.push(`${DIM}${stats}${RESET}  ${truncate(cell.name, room)}${tail}`);
+      // an agent CLI reads as a live delegated agent, matching the list tree's
+      // cyan; the green dot stays in the list's branch gutter only
+      out.push(
+        c.agent
+          ? `${DIM}${stats}${RESET}  ${CYAN}${truncate(cell.name, room)}${RESET}${tail}`
+          : `${DIM}${stats}${RESET}  ${truncate(cell.name, room)}${tail}`,
+      );
     }
   }
 

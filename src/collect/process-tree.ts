@@ -58,6 +58,40 @@ const WRAPPER_NAMES = new Set([
   "watch",
 ]);
 
+// Cross-provider AI coding agents running as sub-processes (a session
+// delegating to another agent CLI). A sub-process whose resolved command is
+// one of these is an agent at work, not a background tool — the renderers
+// mark it live (green dot) and paint the row cyan like the Claude sub-agent
+// rows, so delegated agents stand out from the process noise.
+const AGENT_CLIS = new Set([
+  "copilot",
+  "kiro",
+  "kiro-cli",
+  "gemini",
+  "codex",
+  "opencode",
+  "aider",
+  "goose",
+  "amp",
+  "cursor-agent",
+  "droid",
+  "crush",
+  "auggie",
+  "qwen",
+  "openhands",
+  "cline",
+  "jules",
+  "devin",
+  "plandex",
+  "codebuff",
+]);
+
+// Whether a resolved sub-process command (possibly a "bash › copilot" chain)
+// is a known agent CLI: only the leaf segment counts — that's the command
+// actually doing the work; wrappers/shells ahead of it are just plumbing.
+export const isAgentCmd = (chain: string) =>
+  AGENT_CLIS.has(chain.split(" › ").at(-1)?.toLowerCase() ?? "");
+
 // Join a command onto the running prefix, collapsing a consecutive duplicate
 // (recursive `make › make`, or `npm › npm`) into a single segment.
 const appendSegment = (prefix: string | null, name: string): string => {

@@ -23,6 +23,7 @@ import {
   descendants,
   hostApp,
   indexChildren,
+  isAgentCmd,
   isClaudeProc,
   pruneCpuSamples,
   subprocsOf,
@@ -43,7 +44,7 @@ import {
   transcriptDetails,
   transcriptDetailsCached,
 } from "./collect/transcript.ts";
-import type { Instance, InstanceBase } from "./collect/types.ts";
+import type { Instance, InstanceBase, SubProc } from "./collect/types.ts";
 import { parseUsage } from "./collect/usage.ts";
 import { cwdOf, listAllProcesses, listeningPorts } from "./proc.ts";
 
@@ -59,6 +60,15 @@ export type {
 } from "./collect/types.ts";
 export type { Usage } from "./collect/usage.ts";
 export { captureUsage, readUsage } from "./collect/usage.ts";
+
+// A session with a delegated agent CLI (copilot, gemini, codex, …) in its
+// sub-process tree has not finished its job — it is waiting on that agent —
+// so it reads busy (green) rather than idle (red), whatever the registry
+// status says while the shell command runs.
+const effectiveState = (
+  status: string | null | undefined,
+  children: SubProc[],
+) => (children.some((c) => c.agent) ? "busy" : (status ?? "?"));
 
 // Does a row match the filter? Searches project, host, branch, model, and
 // session id/name. Shared by the snapshot path and the live TUI filter.
@@ -84,6 +94,8 @@ export const __test = {
   attachSubagentsInOrder,
   hostApp,
   cpuPercent,
+  effectiveState,
+  isAgentCmd,
   isClaudeProc,
   versionFromPath,
   indexChildren,
@@ -171,13 +183,24 @@ export async function collectRows(filter: string | null): Promise<Instance[]> {
       if (mtimeMs)
         details = await transcriptDetailsCached(transcript!, mtimeMs);
       const lastMs = Math.max(s?.updatedAt ?? 0, mtimeMs);
+      const children = subprocsOf(p.pid, childrenOf, candidatePids)
+        .sort((a, b) => b.rss - a.rss || a.pid - b.pid)
+        .map((c) => ({
+          pid: c.pid,
+          name: c.name,
+          mem: c.rss,
+          cpu: cpuPercent(c, nowMs),
+          uptimeSec: c.startSec ? nowMs / 1000 - c.startSec : 0,
+          ports: portsFor(c.pid),
+          agent: isAgentCmd(c.name),
+        }));
       return {
         pid: p.pid,
         mem: p.rss,
         cpu: cpuPercent(p, nowMs),
         uptimeSec: p.startSec ? nowMs / 1000 - p.startSec : 0,
         startSec: p.startSec,
-        state: s?.status ?? "?",
+        state: effectiveState(s?.status, children),
         kind: s?.kind ?? null,
         sessionId: s?.sessionId ?? null,
         sessionName: s?.name ?? null,
@@ -193,16 +216,7 @@ export async function collectRows(filter: string | null): Promise<Instance[]> {
         promptAt: details.promptAt ?? null,
         lastTurn: details.lastTurn ?? null,
         transcript: mtimeMs ? transcript : null,
-        children: subprocsOf(p.pid, childrenOf, candidatePids)
-          .sort((a, b) => b.rss - a.rss || a.pid - b.pid)
-          .map((c) => ({
-            pid: c.pid,
-            name: c.name,
-            mem: c.rss,
-            cpu: cpuPercent(c, nowMs),
-            uptimeSec: c.startSec ? nowMs / 1000 - c.startSec : 0,
-            ports: portsFor(c.pid),
-          })),
+        children,
         orphanPorts: [], // filled after all rows are known (attribution by cwd)
       };
     }),
