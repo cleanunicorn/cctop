@@ -29,6 +29,7 @@ import {
   versionFromPath,
 } from "./collect/process-tree.ts";
 import { readSessions, validSession } from "./collect/sessions.ts";
+import { parseSettings } from "./collect/settings.ts";
 import {
   agentContext,
   attachSubagentsInOrder,
@@ -51,6 +52,8 @@ export type { History } from "./collect/history.ts";
 export { collectHistory } from "./collect/history.ts";
 export type { NetRate } from "./collect/network.ts";
 export { netThroughput } from "./collect/network.ts";
+export type { Settings } from "./collect/settings.ts";
+export { readSettings, saveSettings } from "./collect/settings.ts";
 export type {
   Instance,
   OrphanPort,
@@ -75,6 +78,7 @@ export const matchRow = (r: Instance, filter: string | null) =>
 // directly. Not part of the public API.
 export const __test = {
   validSession,
+  parseSettings,
   parseUsage,
   noteEntry,
   describeAssistant,

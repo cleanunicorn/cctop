@@ -25,7 +25,13 @@
 
 import pkg from "./package.json";
 import { runApp } from "./src/app.ts";
-import { captureUsage, collectRows, readUsage } from "./src/collect.ts";
+import {
+  captureUsage,
+  collectRows,
+  readSettings,
+  readUsage,
+  saveSettings,
+} from "./src/collect.ts";
 import { sanitizeDisplay } from "./src/format.ts";
 import { buildFrame } from "./src/render.ts";
 
@@ -41,7 +47,8 @@ const HELP = `\x1b[1mcctop\x1b[0m - monitor running Claude Code sessions
                          model, or session id contains this
 
 \x1b[1mOptions:\x1b[0m
-  -w, --watch[=seconds]  set the refresh interval (default: 1s, min 0.25s)
+  -w, --watch[=seconds]  set the refresh interval (default: 1s, min 0.25s);
+                         remembered for future runs, like the sort mode
   --once                 render once and exit (default when piped)
   --json                 print full session details as JSON
   --capture-usage        save rate-limit usage from a status-line payload on
@@ -68,7 +75,10 @@ function fail(message: string): never {
 }
 
 let filter: string | null = null;
-let watchSecs = 1; // refresh interval; live by default on a terminal
+// Refresh interval: an explicit --watch=N, else the value persisted from a
+// previous run (settings.json), else 1s. null = not given on the CLI.
+let watchSecs: number | null = null;
+const DEFAULT_WATCH_SECS = 1;
 // Below ~0.25s the %CPU sampling window (200ms) collapses to the lifetime
 // average and the process-table walk's duty cycle climbs for no real gain.
 const MIN_WATCH_SECS = 0.25;
@@ -87,7 +97,8 @@ for (let i = 0; i < args.length; i++) {
   } else if (arg === "--once") {
     once = true;
   } else if (arg === "-w" || arg === "--watch") {
-    // interval already defaults to 1s; flag is accepted for clarity
+    // bare flag = explicitly ask for the default, overriding a persisted value
+    watchSecs = DEFAULT_WATCH_SECS;
   } else if (arg.startsWith("--watch=")) {
     watchSecs = Number(arg.slice(8));
     if (!(watchSecs >= MIN_WATCH_SECS))
@@ -162,5 +173,20 @@ if (asJson) {
     );
   }
 } else {
-  await runApp({ filter, watchSecs, version: VERSION });
+  // Preferences persisted by previous runs: an explicit --watch wins over the
+  // persisted interval (and updates it); the persisted value is re-validated
+  // against the same floor as the flag in case the file was hand-edited.
+  const settings = await readSettings();
+  const persisted =
+    settings.watchSecs != null && settings.watchSecs >= MIN_WATCH_SECS
+      ? settings.watchSecs
+      : null;
+  if (watchSecs != null && watchSecs !== persisted)
+    await saveSettings({ watchSecs });
+  await runApp({
+    filter,
+    watchSecs: watchSecs ?? persisted ?? DEFAULT_WATCH_SECS,
+    sort: settings.sort,
+    version: VERSION,
+  });
 }

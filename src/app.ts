@@ -15,6 +15,7 @@ import {
   type NetRate,
   netThroughput,
   readUsage,
+  saveSettings,
   type Usage,
 } from "./collect.ts";
 import {
@@ -108,6 +109,7 @@ const GUTTER = "  "; // matching width for unselected rows + header
 export interface AppOptions {
   filter: string | null;
   watchSecs: number;
+  sort: string | null; // persisted sort-mode name; unknown/null = default
   version: string;
 }
 
@@ -122,7 +124,12 @@ export async function runApp(opts: AppOptions): Promise<void> {
     selectedIndex: 0,
     filter: opts.filter,
     filterInput: "",
-    sortIndex: 0,
+    // restore the persisted sort; a name from a newer/older version that no
+    // longer exists falls back to default (findIndex -1 → 0)
+    sortIndex: Math.max(
+      0,
+      SORTS.findIndex((s) => s.name === opts.sort),
+    ),
     scrollTop: 0,
     detailScroll: 0,
     detailRow: null,
@@ -407,6 +414,8 @@ export async function runApp(opts: AppOptions): Promise<void> {
       case "s":
         state.sortIndex = (state.sortIndex + 1) % SORTS.length;
         flash(`sort: ${SORTS[state.sortIndex].name}`);
+        // remember across restarts; best-effort and off the draw path
+        void saveSettings({ sort: SORTS[state.sortIndex].name });
         break;
       case "x": {
         const row = selectedRow(displayRows());
