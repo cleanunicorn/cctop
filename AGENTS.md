@@ -14,10 +14,13 @@ exits, while `--json` prints one JSON snapshot and exits.
 - **Runtime:** Bun (TypeScript run directly, no build step for dev).
 - **Platforms:** macOS and Linux only (process table is read via macOS
   `libproc` FFI or Linux `/proc`).
-- **Read-only, with one deliberate exception.** cctop spawns no processes and
-  never mutates any session, registry, or transcript. Its one write is its own
-  usage cache (`~/.claude/cctop/usage.json`), and only under `--capture-usage`;
-  the only thing it ever does to another process is send a signal, and only on an
+- **Read-only, with two deliberate exceptions.** cctop spawns no processes and
+  never mutates any session, registry, or transcript. Its only writes are its
+  own files under `~/.claude/cctop/`: the usage cache (`usage.json`, only under
+  `--capture-usage`) and the persisted TUI preferences (`settings.json`, the
+  refresh interval, sort mode, and notifications toggle, written only when the
+  user changes them); the
+  only thing it ever does to another process is send a signal, and only on an
   explicit user action (`x` → SIGTERM a session; `f` → SIGTERM a session's
   orphaned dev-server processes to free their ports). Preserve this property.
 - **Zero runtime dependencies.** cctop imports only Bun and OS built-ins
@@ -66,6 +69,10 @@ src/history.ts  pure renderer for the history dashboard (the `h` view): a
                 per-day activity bar chart + compact composition text;
                 renderHistory() over the aggregated History
 src/format.ts   formatting + ANSI helpers (visLen/pad/colors/formatMem/...)
+src/notify.ts   "needs you" notifications: pure busy→idle transition tracking
+                (finishedSessions) + the BEL/OSC 9 sequence (notifySeq) the
+                TUI writes when a session flips to waiting for input
+
 src/proc.ts     process-table facade: picks the platform impl at startup and
                 re-exports listAllProcesses(), cwdOf(), netCounters(), parseProcNetDev()
 src/proc/       per-platform sources behind that facade: darwin.ts (libproc FFI),
@@ -76,8 +83,9 @@ src/collect.ts  orchestrator: correlates the process table + session registry +
 src/collect/    one collector per data source: sessions, usage, transcript,
                 subagents, process-tree (HOST + sub-process tree), network,
                 orphans (leftover dev-server ports), history (full-scan
-                aggregator for the `h` view); plus entry/types/paths leaf
-                helpers shared between them
+                aggregator for the `h` view), settings (persisted TUI
+                preferences); plus entry/types/paths leaf helpers shared
+                between them
 ```
 
 Data flow: `proc.ts` + the session registry + transcripts → `collect.ts`
@@ -87,8 +95,11 @@ them once, or `app.ts` drives them as a live, navigable TUI.
 Data sources, all read-only: the OS process table (libproc/`/proc`), and — under
 `~/.claude` — the per-pid session registry `sessions/<pid>.json`, each session's
 transcript `projects/<dir>/<id>.jsonl` (tail only, cached by mtime), and the
-sub-agent transcripts under `<id>/subagents/`. The one file cctop *writes* is its
-own usage cache `~/.claude/cctop/usage.json` (only under `--capture-usage`).
+sub-agent transcripts under `<id>/subagents/`. The only files cctop *writes* are
+its own usage cache `~/.claude/cctop/usage.json` (only under `--capture-usage`)
+and its preferences `~/.claude/cctop/settings.json` (refresh interval + sort
+mode + notifications toggle; written when an explicit `--watch` differs from
+the persisted value and when `s` cycles the sort or `n` toggles notifications).
 
 The history view (`h`, TUI-only) is the one place that full-scans *every*
 transcript under `projects/` — session files and the `<id>/subagents/` tree

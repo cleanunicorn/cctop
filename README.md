@@ -17,6 +17,13 @@ waiting for input.
   each session's sub-processes, open and orphaned TCP ports.
 - **Live TUI** — navigate with the keyboard, open a per-session detail view, and
   filter and sort on the fly; piped or run with `--once` it prints a single frame.
+  The sort mode, refresh interval, and notifications toggle are remembered
+  across restarts.
+- **Get pinged when a session needs you** *(opt-in)* — press `n` and cctop
+  rings the terminal bell and raises a desktop notification (OSC 9, supported
+  by iTerm2, Ghostty, kitty, WezTerm, Windows Terminal) whenever a busy
+  session finishes its turn and waits for your input — so you can look away
+  while agents run. Works with tmux `monitor-bell` window flags too.
 - **Status at a glance** — busy sessions are green, idle red; CPU and context
   heat toward red as they climb; the selected session is marked with a blue bar.
 - **Weekly usage limits** *(opt-in)* — show your Claude subscription's 5h/7d
@@ -28,7 +35,8 @@ waiting for input.
   token-usage chart, recent sessions, and breakdowns by model, tool/MCP, and
   project.
 - **Read-only and local** — the TUI reads only `~/.claude` and the process table,
-  spawns no processes.
+  spawns no processes; the only files it writes are its own preferences and
+  usage cache under `~/.claude/cctop/`.
 - **Zero dependencies** — a single Bun program with no npm packages;
   it uses only the Bun runtime and OS built-ins.
 
@@ -112,6 +120,7 @@ While the TUI is running:
 | `esc`           | leave the detail view / close an overlay                         |
 | `/`             | filter sessions (type, `enter` to apply)                         |
 | `s`             | cycle the sort column (default, cpu, mem, ctx, pid)              |
+| `n`             | toggle notifications (bell + desktop when a session needs input) |
 | `x`             | quit the selected session (`SIGTERM`, with confirm)              |
 | `f`             | reclaim the detail view's orphan ports (`SIGTERM`, with confirm) |
 | `?`             | toggle the help overlay                                          |
