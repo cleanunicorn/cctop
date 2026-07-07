@@ -118,3 +118,6 @@ todo/
 
 # Bun build intermediate left behind by `bun build --compile`
 *.bun-build
+
+# Claude
+.claude/
