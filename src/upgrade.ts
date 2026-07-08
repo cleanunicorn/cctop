@@ -33,12 +33,12 @@ const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 // A malformed override lands in the URL path (the scheme+host are hardcoded, so
 // it can't redirect the host) — but it would otherwise fail as a confusing 404.
 // Reject it up front with a clear message. Defense-in-depth, not a trust border.
-function assertValidOverrides(): void {
+export function assertValidOverrides(): void {
   const repo = process.env.CCTOP_REPO?.trim();
   if (repo && !/^[\w.-]+\/[\w.-]+$/.test(repo))
     throw new Error(`invalid CCTOP_REPO "${repo}" (expected "owner/name")`);
   const version = process.env.CCTOP_VERSION?.trim();
-  if (version && !/^v?\d+\.\d+\.\d+(-[\w.]+)?$/.test(version))
+  if (version && !/^v?\d+\.\d+\.\d+(-[\w.-]+)?$/.test(version))
     throw new Error(
       `invalid CCTOP_VERSION "${version}" (expected e.g. v0.5.0)`,
     );
