@@ -15,6 +15,7 @@ import {
   type NetRate,
   netThroughput,
   readUsage,
+  saveSettings,
   type Usage,
 } from "./collect.ts";
 import {
@@ -34,6 +35,7 @@ import {
   YELLOW,
 } from "./format.ts";
 import { type HistoryTab, renderHistory } from "./history.ts";
+import { finishedSessions, notifySeq } from "./notify.ts";
 import {
   buildFrame,
   type Group,
@@ -73,6 +75,7 @@ interface State {
   messageColor: string;
   messageUntil: number;
   confirm: ConfirmAction | null;
+  notify: boolean; // ring (BEL + OSC 9) when a busy session needs input
 }
 
 interface SortMode {
@@ -108,6 +111,8 @@ const GUTTER = "  "; // matching width for unselected rows + header
 export interface AppOptions {
   filter: string | null;
   watchSecs: number;
+  sort: string | null; // persisted sort-mode name; unknown/null = default
+  notify: boolean; // persisted notifications toggle (default off)
   version: string;
 }
 
@@ -122,7 +127,12 @@ export async function runApp(opts: AppOptions): Promise<void> {
     selectedIndex: 0,
     filter: opts.filter,
     filterInput: "",
-    sortIndex: 0,
+    // restore the persisted sort; a name from a newer/older version that no
+    // longer exists falls back to default (findIndex -1 → 0)
+    sortIndex: Math.max(
+      0,
+      SORTS.findIndex((s) => s.name === opts.sort),
+    ),
     scrollTop: 0,
     detailScroll: 0,
     detailRow: null,
@@ -135,7 +145,10 @@ export async function runApp(opts: AppOptions): Promise<void> {
     messageColor: DIM,
     messageUntil: 0,
     confirm: null,
+    notify: opts.notify,
   };
+  // rowKey → when the session was first observed busy (see notify.ts)
+  const busySince = new Map<string, number>();
 
   // --- terminal setup / teardown ------------------------------------------
   // Alt screen (like top), hidden cursor, focus reporting off (we never read
@@ -239,6 +252,11 @@ export async function runApp(opts: AppOptions): Promise<void> {
     } finally {
       refreshing = false;
     }
+    // Track busy→idle flips every refresh (so toggling notifications on never
+    // fires for stale transitions), ring only when enabled. All sessions
+    // count, not just filtered ones — the filter is a view concern.
+    const finished = finishedSessions(busySince, state.rows, Date.now());
+    if (state.notify && finished.length) out.write(notifySeq(finished));
     // listScreen re-validates the cursor (the only surface that shows it), so a
     // session ending while the user sits in detail or a confirm never moves the
     // pinned selection. Just repaint.
@@ -407,6 +425,17 @@ export async function runApp(opts: AppOptions): Promise<void> {
       case "s":
         state.sortIndex = (state.sortIndex + 1) % SORTS.length;
         flash(`sort: ${SORTS[state.sortIndex].name}`);
+        // remember across restarts; best-effort and off the draw path
+        void saveSettings({ sort: SORTS[state.sortIndex].name });
+        break;
+      case "n":
+        state.notify = !state.notify;
+        flash(
+          state.notify
+            ? "notifications on: bell when a busy session needs input"
+            : "notifications off",
+        );
+        void saveSettings({ notify: state.notify });
         break;
       case "x": {
         const row = selectedRow(displayRows());
@@ -910,6 +939,10 @@ export async function runApp(opts: AppOptions): Promise<void> {
       b("View"),
       key("/", "filter sessions (type, enter to apply)"),
       key("s", "cycle sort (default, cpu, mem, ctx, pid)"),
+      key(
+        "n",
+        "toggle notifications (bell + desktop when a session needs input)",
+      ),
       key("h", "session history (↹ tabs, ↑↓ scroll, r rescan, esc back)"),
       key("?", "toggle this help"),
       "",
@@ -985,7 +1018,7 @@ export async function runApp(opts: AppOptions): Promise<void> {
             state.detailEnded
             ? "session ended · ↑↓ scroll · esc back · q exit"
             : "↑↓ scroll · esc back · x quit · f free ports · q exit"
-          : `↑↓ move · enter detail · / filter · s sort:${sort} · h history · x quit · ? help · q exit`;
+          : `↑↓ move · enter detail · / filter · s sort:${sort} · n bell:${state.notify ? "on" : "off"} · h history · x quit · ? help · q exit`;
     // the history view doesn't auto-refresh, so drop the "every Ns · clock" part
     const left =
       state.mode === "history"
