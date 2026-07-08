@@ -64,14 +64,32 @@ export type {
 export type { Usage } from "./collect/usage.ts";
 export { captureUsage, readUsage } from "./collect/usage.ts";
 
+// Headless sessions (`claude -p`, SDK-spawned) never write a status to the
+// registry, but they do leave a trail — transcript writes and registry
+// updatedAt bumps — so infer their state from it the way sub-agent liveness
+// is inferred: recent activity is busy, a long-silent one is idle (an SDK
+// session parked between turns). The window matches SUBAGENT_BUSY_MS — wide
+// enough that a quiet stretch mid tool-call doesn't flicker the row red.
+const HEADLESS_BUSY_MS = 180_000;
+
 // A session with a delegated agent CLI (copilot, gemini, codex, …) in its
 // sub-process tree has not finished its job — it is waiting on that agent —
 // so it reads busy (green) rather than idle (red), whatever the registry
-// status says while the shell command runs.
+// status says while the shell command runs. Without a registry status, fall
+// back to the activity trail (lastMs); "?" only when there is no trail at
+// all — a session we truly know nothing about stays dim rather than crying
+// wolf in red.
 const effectiveState = (
   status: string | null | undefined,
   children: SubProc[],
-) => (children.some((c) => c.agent) ? "busy" : (status ?? "?"));
+  lastMs: number,
+  nowMs: number,
+) => {
+  if (children.some((c) => c.agent)) return "busy";
+  if (status) return status;
+  if (!lastMs) return "?";
+  return nowMs - lastMs < HEADLESS_BUSY_MS ? "busy" : "idle";
+};
 
 // Does a row match the filter? Searches project, host, branch, model, and
 // session id/name. Shared by the snapshot path and the live TUI filter.
@@ -204,7 +222,7 @@ export async function collectRows(filter: string | null): Promise<Instance[]> {
         cpu: cpuPercent(p, nowMs),
         uptimeSec: p.startSec ? nowMs / 1000 - p.startSec : 0,
         startSec: p.startSec,
-        state: effectiveState(s?.status, children),
+        state: effectiveState(s?.status, children, lastMs, nowMs),
         kind: s?.kind ?? null,
         sessionId: s?.sessionId ?? null,
         sessionName: s?.name ?? null,

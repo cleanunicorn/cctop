@@ -772,7 +772,8 @@ describe("agent CLI detection", () => {
 
 // effectiveState flips a session to busy while a delegated agent CLI runs in
 // its sub-process tree: the session is waiting on that agent, its job is not
-// done, so it must not read idle (red).
+// done, so it must not read idle (red). Sessions that never report a status
+// (headless `claude -p`, SDK-spawned) fall back to their activity trail.
 describe("effective session state", () => {
   const child = (name: string, agent: boolean) => ({
     pid: 1,
@@ -783,24 +784,42 @@ describe("effective session state", () => {
     ports: [],
     agent,
   });
+  const now = 1_000_000_000;
+  const recent = now - 5_000; // well inside the busy window
+  const stale = now - 600_000; // 10 min silent
 
   test("a running agent child flips any non-busy status to busy", () => {
-    expect(__test.effectiveState("idle", [child("bash › copilot", true)])).toBe(
-      "busy",
-    );
-    expect(__test.effectiveState("waiting", [child("gemini", true)])).toBe(
-      "busy",
-    );
-    expect(__test.effectiveState(undefined, [child("codex", true)])).toBe(
-      "busy",
-    );
+    expect(
+      __test.effectiveState("idle", [child("bash › copilot", true)], 0, now),
+    ).toBe("busy");
+    expect(
+      __test.effectiveState("waiting", [child("gemini", true)], 0, now),
+    ).toBe("busy");
+    expect(
+      __test.effectiveState(undefined, [child("codex", true)], 0, now),
+    ).toBe("busy");
   });
 
   test("without an agent child the registry status stands", () => {
-    expect(__test.effectiveState("idle", [child("node", false)])).toBe("idle");
-    expect(__test.effectiveState("busy", [])).toBe("busy");
-    expect(__test.effectiveState(undefined, [])).toBe("?");
-    expect(__test.effectiveState(null, [child("make", false)])).toBe("?");
+    expect(
+      __test.effectiveState("idle", [child("node", false)], recent, now),
+    ).toBe("idle");
+    expect(__test.effectiveState("busy", [], stale, now)).toBe("busy");
+  });
+
+  test("no status falls back to the activity trail", () => {
+    expect(__test.effectiveState(undefined, [], recent, now)).toBe("busy");
+    expect(__test.effectiveState(undefined, [], stale, now)).toBe("idle");
+    expect(
+      __test.effectiveState(null, [child("make", false)], stale, now),
+    ).toBe("idle");
+  });
+
+  test("no status and no trail stays unknown", () => {
+    expect(__test.effectiveState(undefined, [], 0, now)).toBe("?");
+    expect(__test.effectiveState(null, [child("make", false)], 0, now)).toBe(
+      "?",
+    );
   });
 });
 
