@@ -89,14 +89,10 @@ const args = Bun.argv.slice(2);
 // even imports the network/fs-mutating code.
 if (args[0] === "upgrade") {
   const rest = args.slice(1);
-  const unknown = rest.find((a) => a !== "--check" && a !== "-n");
+  const unknown = rest.find((a) => a !== "--check");
   if (unknown) fail(`unknown argument for upgrade: ${unknown}`);
   const { runUpgrade } = await import("./src/upgrade.ts");
-  process.exit(
-    await runUpgrade(VERSION, {
-      check: rest.includes("--check") || rest.includes("-n"),
-    }),
-  );
+  process.exit(await runUpgrade(VERSION, { check: rest.includes("--check") }));
 }
 
 for (let i = 0; i < args.length; i++) {
