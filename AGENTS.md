@@ -87,6 +87,11 @@ src/collect/    one collector per data source: sessions, usage, transcript,
                 orphans (leftover dev-server ports), history (full-scan
                 aggregator for the `h` view); plus entry/types/paths leaf
                 helpers shared between them
+install.sh      release-binary installer served from `main` (curl … | sh):
+                downloads + checksum-verifies the latest release for the host
+                OS/arch. Asset names mirror .github/workflows/release.yml — the
+                same names src/upgrade.ts consumes; honors PREFIX/CCTOP_VERSION/
+                CCTOP_REPO
 ```
 
 Data flow: `proc.ts` + the session registry + transcripts → `collect.ts`

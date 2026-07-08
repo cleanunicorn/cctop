@@ -45,6 +45,8 @@ curl -fsSL https://raw.githubusercontent.com/stefanprodan/cctop/main/install.sh 
 
 The binary is self-contained — it needs no Bun runtime. Re-run the same command
 to update, or use the built-in updater (`cctop upgrade`, see [Update](#update)).
+To install a specific release, set `CCTOP_VERSION=v0.5.0` (default: latest); to
+install from a fork, set `CCTOP_REPO=owner/name`.
 
 Or install it with Homebrew:
 
@@ -100,6 +102,13 @@ bun rm -g cctop; bun install -g github:stefanprodan/cctop#v0.4.1
 ```
 
 ### Uninstall
+
+If you installed the standalone binary (the script or `cctop upgrade`), remove
+it:
+
+```sh
+rm ~/.local/bin/cctop   # or "$PREFIX/bin/cctop"
+```
 
 With Homebrew:
 
