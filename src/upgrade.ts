@@ -19,8 +19,30 @@ import { BOLD, DIM, GREEN, RED, RESET } from "./format.ts";
 // without touching the code; defaults to the canonical repo the README installs
 // from.
 const REPO = process.env.CCTOP_REPO?.trim() || "stefanprodan/cctop";
+const RELEASES = `https://github.com/${REPO}/releases`;
+const GITHUB_HEADERS = { "user-agent": "cctop" };
+
+// A real cctop binary is tens of MB; anything smaller is a truncated or wrong
+// download, so refuse to install it.
+const MIN_BINARY_BYTES = 1_000_000;
+// ustar archives are a sequence of 512-byte blocks (one header, then padded data).
+const TAR_BLOCK = 512;
 
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+// A malformed override lands in the URL path (the scheme+host are hardcoded, so
+// it can't redirect the host) — but it would otherwise fail as a confusing 404.
+// Reject it up front with a clear message. Defense-in-depth, not a trust border.
+function assertValidOverrides(): void {
+  const repo = process.env.CCTOP_REPO?.trim();
+  if (repo && !/^[\w.-]+\/[\w.-]+$/.test(repo))
+    throw new Error(`invalid CCTOP_REPO "${repo}" (expected "owner/name")`);
+  const version = process.env.CCTOP_VERSION?.trim();
+  if (version && !/^v?\d+\.\d+\.\d+(-[\w.]+)?$/.test(version))
+    throw new Error(
+      `invalid CCTOP_VERSION "${version}" (expected e.g. v0.5.0)`,
+    );
+}
 
 // --- Pure helpers (exported for the unit tests) --------------------------
 
@@ -62,7 +84,27 @@ export function compareVersions(a: string, b: string): number {
   if (pa.pre === pb.pre) return 0;
   if (pa.pre === "") return 1; // 1.0.0 > 1.0.0-rc.1
   if (pb.pre === "") return -1;
-  return pa.pre > pb.pre ? 1 : -1;
+  return comparePre(pa.pre, pb.pre);
+}
+
+// Compare two prerelease strings (rc.2 vs rc.10) by dot-separated identifiers:
+// numeric identifiers compare numerically (so rc.10 > rc.2), others lexically;
+// a prerelease that is a prefix of a longer one sorts lower.
+function comparePre(a: string, b: string): number {
+  const as = a.split(".");
+  const bs = b.split(".");
+  const n = Math.max(as.length, bs.length);
+  for (let i = 0; i < n; i++) {
+    const x = i < as.length ? as[i] : undefined;
+    const y = i < bs.length ? bs[i] : undefined;
+    if (x === undefined) return -1;
+    if (y === undefined) return 1;
+    if (/^\d+$/.test(x) && /^\d+$/.test(y)) {
+      const d = Number.parseInt(x, 10) - Number.parseInt(y, 10);
+      if (d !== 0) return d > 0 ? 1 : -1;
+    } else if (x !== y) return x > y ? 1 : -1;
+  }
+  return 0;
 }
 
 // …/releases/latest 302-redirects to …/releases/tag/<tag>; pull the tag out of
@@ -93,8 +135,8 @@ export function extractFromTar(
 ): Uint8Array | null {
   const dec = new TextDecoder();
   let off = 0;
-  while (off + 512 <= tar.length) {
-    const header = tar.subarray(off, off + 512);
+  while (off + TAR_BLOCK <= tar.length) {
+    const header = tar.subarray(off, off + TAR_BLOCK);
     if (header.every((b) => b === 0)) break; // end-of-archive marker
     const field = (start: number, len: number) =>
       dec
@@ -104,13 +146,13 @@ export function extractFromTar(
     const entry = field(0, 100);
     const size = Number.parseInt(field(124, 12), 8) || 0;
     const typeflag = String.fromCharCode(header[156]);
-    const dataStart = off + 512;
+    const dataStart = off + TAR_BLOCK;
     if (
       (typeflag === "0" || typeflag === "\0") &&
       (entry === name || entry.endsWith(`/${name}`))
     )
       return tar.subarray(dataStart, dataStart + size);
-    off = dataStart + Math.ceil(size / 512) * 512;
+    off = dataStart + Math.ceil(size / TAR_BLOCK) * TAR_BLOCK;
   }
   return null;
 }
@@ -136,9 +178,9 @@ async function latestVersion(): Promise<string> {
   // offline): CCTOP_VERSION=v0.5.0 cctop upgrade.
   const pinned = process.env.CCTOP_VERSION?.trim();
   if (pinned) return pinned.startsWith("v") ? pinned : `v${pinned}`;
-  const res = await fetch(`https://github.com/${REPO}/releases/latest`, {
+  const res = await fetch(`${RELEASES}/latest`, {
     redirect: "manual",
-    headers: { "user-agent": "cctop" },
+    headers: GITHUB_HEADERS,
   });
   const tag = tagFromLocation(res.headers.get("location"));
   if (!tag)
@@ -148,16 +190,17 @@ async function latestVersion(): Promise<string> {
 
 async function upgradeBinary(tag: string): Promise<void> {
   const asset = assetName();
-  const base = `https://github.com/${REPO}/releases/download/${tag}`;
-  const headers = { "user-agent": "cctop" };
+  const base = `${RELEASES}/download/${tag}`;
 
-  const sumsRes = await fetch(`${base}/cctop_checksums.txt`, { headers });
+  const sumsRes = await fetch(`${base}/cctop_checksums.txt`, {
+    headers: GITHUB_HEADERS,
+  });
   if (!sumsRes.ok)
     throw new Error(`fetching checksums: HTTP ${sumsRes.status}`);
   const want = parseChecksums(await sumsRes.text(), asset);
   if (!want) throw new Error(`no checksum published for ${asset}`);
 
-  const tgzRes = await fetch(`${base}/${asset}`, { headers });
+  const tgzRes = await fetch(`${base}/${asset}`, { headers: GITHUB_HEADERS });
   if (!tgzRes.ok)
     throw new Error(`downloading ${asset}: HTTP ${tgzRes.status}`);
   const gz = new Uint8Array(await tgzRes.arrayBuffer());
@@ -167,7 +210,7 @@ async function upgradeBinary(tag: string): Promise<void> {
     throw new Error(`checksum mismatch for ${asset} — refusing to install`);
 
   const bin = extractFromTar(Bun.gunzipSync(gz), "cctop");
-  if (!bin || bin.length < 1_000_000)
+  if (!bin || bin.length < MIN_BINARY_BYTES)
     throw new Error("the archive did not contain a valid cctop binary");
 
   // Replace ourselves atomically: write a sibling temp file on the *same*
@@ -198,21 +241,20 @@ async function upgradeBinary(tag: string): Promise<void> {
 }
 
 function printManualInstructions(latest: string): void {
+  const installCmd = `  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | sh`;
   if (Bun.main.includes("/.bun/install/global/")) {
     console.log(
       `This is a ${BOLD}bun install -g${RESET} install rather than the ` +
         `standalone binary, so it updates through bun:\n\n` +
         `  bun install -g github:${REPO}#${latest}\n\n` +
-        `Or switch to the self-updating binary:\n\n` +
-        `  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | sh`,
+        `Or switch to the self-updating binary:\n\n${installCmd}`,
     );
     return;
   }
   console.log(
     `cctop is running from a source checkout, which self-update can't ` +
       `manage.\nUpdate it with git (\`git pull\`), or install the standalone ` +
-      `binary:\n\n` +
-      `  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | sh`,
+      `binary:\n\n${installCmd}`,
   );
 }
 
@@ -229,6 +271,7 @@ export async function runUpgrade(
 ): Promise<number> {
   let latest: string;
   try {
+    assertValidOverrides();
     latest = await latestVersion();
   } catch (e) {
     console.error(
