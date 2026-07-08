@@ -28,19 +28,31 @@ waiting for input.
   token-usage chart, recent sessions, and breakdowns by model, tool/MCP, and
   project.
 - **Read-only and local** — the TUI reads only `~/.claude` and the process table,
-  spawns no processes.
+  spawns no processes. (The one exception is the explicit `cctop upgrade`
+  command, which fetches and replaces its own binary.)
 - **Zero dependencies** — a single Bun program with no npm packages;
   it uses only the Bun runtime and OS built-ins.
 
 ## Install
 
-On macOS or Linux, install the standalone binary with Homebrew:
+On macOS or Linux, install the latest standalone binary with the install
+script — it downloads the build for your OS/arch, verifies its checksum, and
+installs it to `~/.local/bin` (override with `PREFIX=...`):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/stefanprodan/cctop/main/install.sh | sh
+```
+
+The binary is self-contained — it needs no Bun runtime. Re-run the same command
+to update, or use the built-in updater (`cctop upgrade`, see [Update](#update)).
+
+Or install it with Homebrew:
 
 ```sh
 brew install stefanprodan/tap/cctop
 ```
 
-Or install it as a script with Bun:
+Or as a script with Bun (requires Bun, and pins an explicit release):
 
 ```sh
 bun install -g github:stefanprodan/cctop#v0.4.1
@@ -64,13 +76,24 @@ See [docs/usage-limits.md](docs/usage-limits.md) for more details.
 
 ### Update
 
+If you installed the standalone binary (via the install script above), update
+it in place with the built-in updater:
+
+```sh
+cctop upgrade
+```
+
+It fetches the latest release for your OS/arch, verifies its checksum, and swaps
+the binary atomically; `cctop upgrade --check` only reports whether a newer
+version is available. (Re-running the install script does the same thing.)
+
 With Homebrew:
 
 ```sh
 brew upgrade stefanprodan/tap/cctop
 ```
 
-Or upgrade the script to the latest [release](https://github.com/stefanprodan/cctop/releases) with Bun:
+With Bun, reinstall pinned to the latest [release](https://github.com/stefanprodan/cctop/releases):
 
 ```sh
 bun rm -g cctop; bun install -g github:stefanprodan/cctop#v0.4.1
@@ -121,9 +144,11 @@ While the TUI is running:
 
 ```
 cctop [filter] [options]
+cctop upgrade [--check]
 
   filter                 only show sessions whose project, host, branch,
                          model, or session id contains this
+  upgrade [--check]      update the standalone binary to the latest release
   -w, --watch[=seconds]  set the refresh interval (default: 1s, min 0.25s)
   --once                 render once and exit (default when piped)
   --json                 print full session details as JSON
