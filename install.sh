@@ -13,6 +13,9 @@
 #   PREFIX         install prefix (default: $HOME/.local; binary -> $PREFIX/bin)
 #   CCTOP_VERSION  install a specific tag, e.g. v0.5.0 (default: latest)
 #   CCTOP_REPO     source repository (default: stefanprodan/cctop)
+#   CCTOP_INSECURE_SKIP_VERIFY
+#                  set to 1 to install without checksum verification when no
+#                  sha256 tool is present (unsafe; last resort)
 set -eu
 
 REPO="${CCTOP_REPO:-stefanprodan/cctop}"
@@ -57,7 +60,8 @@ else
 fi
 
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT INT TERM
+staged="" # a partly-installed sibling in $BIN_DIR; cleaned up on any exit
+trap 'rm -rf "$tmp"; [ -n "$staged" ] && rm -f "$staged"' EXIT INT TERM
 
 info "Downloading cctop ($label) for $os/$arch ..."
 curl -fSL --progress-bar --proto '=https' --tlsv1.2 "$base/$asset" -o "$tmp/$asset" ||
@@ -69,10 +73,14 @@ curl -fSL --progress-bar --proto '=https' --tlsv1.2 "$base/$asset" -o "$tmp/$ass
 curl -fsSL "$base/cctop_checksums.txt" -o "$tmp/checksums.txt" ||
   err "could not download checksums for $label; refusing to install unverified"
 
+# Capture the hash without a pipe so a tool failure aborts (a pipe would mask it
+# behind awk's exit status, leaving got="" and silently skipping verification).
 if command -v sha256sum >/dev/null 2>&1; then
-  got="$(sha256sum "$tmp/$asset" | awk '{print $1}')"
+  sum="$(sha256sum "$tmp/$asset")" || err "failed to hash $asset"
+  got="${sum%% *}"
 elif command -v shasum >/dev/null 2>&1; then
-  got="$(shasum -a 256 "$tmp/$asset" | awk '{print $1}')"
+  sum="$(shasum -a 256 "$tmp/$asset")" || err "failed to hash $asset"
+  got="${sum%% *}"
 elif [ "${CCTOP_INSECURE_SKIP_VERIFY:-}" = "1" ]; then
   got=""
   info "warning: no sha256 tool found; skipping verification (CCTOP_INSECURE_SKIP_VERIFY=1)"
@@ -92,13 +100,10 @@ mkdir -p "$BIN_DIR"
 # over the target. Overwriting a running binary in place fails with ETXTBSY;
 # rename() only repoints the directory entry, leaving the busy inode intact, so
 # re-running to update works even while cctop is running elsewhere.
-staged="$BIN_DIR/.cctop.new.$$"
+staged="$(mktemp "$BIN_DIR/.cctop.XXXXXX")" || err "failed to write to $BIN_DIR"
 install -m 0755 "$tmp/cctop" "$staged" || err "failed to write to $BIN_DIR"
-mv -f "$staged" "$BIN_DIR/cctop" ||
-  {
-    rm -f "$staged"
-    err "failed to install to $BIN_DIR/cctop"
-  }
+mv -f "$staged" "$BIN_DIR/cctop" || err "failed to install to $BIN_DIR/cctop"
+staged="" # moved into place; nothing left to clean up
 
 info "Installed cctop $("$BIN_DIR/cctop" --version 2>/dev/null || echo "") to $BIN_DIR/cctop"
 
