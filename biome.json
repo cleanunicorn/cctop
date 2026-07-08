@@ -27,6 +27,6 @@
     }
   },
   "files": {
-    "includes": ["**", "!bin/", "!*.bun-build"]
+    "includes": ["**", "!bin/", "!*.bun-build", "!!.claude"]
   }
 }
