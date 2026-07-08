@@ -15,12 +15,16 @@ const enc = new TextEncoder();
 // Build a single ustar file entry (a 512-byte header + null-padded data) — just
 // the fields extractFromTar reads (name, size, typeflag) plus a correct header
 // checksum, so a real `tar` would also accept it.
-function ustarEntry(name: string, data: Uint8Array): Uint8Array {
+function ustarEntry(
+  name: string,
+  data: Uint8Array,
+  typeflag = "0",
+): Uint8Array {
   const buf = new Uint8Array(512 + Math.ceil(data.length / 512) * 512);
   buf.set(enc.encode(name), 0);
   buf.set(enc.encode("000644 "), 100); // mode
   buf.set(enc.encode(`${data.length.toString(8).padStart(11, "0")} `), 124);
-  buf[156] = "0".charCodeAt(0); // typeflag: regular file
+  buf[156] = typeflag.charCodeAt(0); // typeflag ("0" = regular file, "x" = pax)
   buf.set(enc.encode("ustar\0"), 257);
   buf.set(enc.encode("00"), 263);
   for (let i = 148; i < 156; i++) buf[i] = 0x20; // checksum field as spaces
@@ -31,8 +35,8 @@ function ustarEntry(name: string, data: Uint8Array): Uint8Array {
   return buf;
 }
 
-function tarOf(entries: Array<[string, Uint8Array]>): Uint8Array {
-  const parts = entries.map(([n, d]) => ustarEntry(n, d));
+function tarOf(entries: Array<[string, Uint8Array, string?]>): Uint8Array {
+  const parts = entries.map(([n, d, tf]) => ustarEntry(n, d, tf));
   const end = new Uint8Array(1024); // two zero blocks terminate the archive
   const out = new Uint8Array(
     parts.reduce((a, p) => a + p.length, 0) + end.length,
@@ -76,10 +80,23 @@ describe("compareVersions", () => {
     expect(compareVersions("0.5.0", "v0.4.1")).toBe(1);
   });
 
+  test("handles version cores of unequal length", () => {
+    expect(compareVersions("v1.2", "v1.2.0")).toBe(0);
+    expect(compareVersions("v1.3", "v1.2.5")).toBe(1);
+    expect(compareVersions("1.2", "1.2.1")).toBe(-1);
+  });
+
   test("a prerelease sorts below its release", () => {
     expect(compareVersions("v0.5.0", "v0.5.0-rc.1")).toBe(1);
     expect(compareVersions("v0.5.0-rc.1", "v0.5.0")).toBe(-1);
     expect(compareVersions("v0.5.0-rc.2", "v0.5.0-rc.1")).toBe(1);
+  });
+
+  test("orders prerelease identifiers numerically, not lexically", () => {
+    expect(compareVersions("v0.5.0-rc.10", "v0.5.0-rc.2")).toBe(1);
+    expect(compareVersions("v0.5.0-rc.2", "v0.5.0-rc.10")).toBe(-1);
+    expect(compareVersions("v0.5.0-alpha", "v0.5.0-beta")).toBe(-1);
+    expect(compareVersions("v0.5.0-rc.1", "v0.5.0-rc.1.1")).toBe(-1);
   });
 });
 
@@ -126,6 +143,16 @@ describe("parseChecksums", () => {
       ),
     ).toBe(hex);
   });
+
+  test("normalizes uppercase hex to lowercase", () => {
+    const hex = "AB".repeat(32);
+    expect(
+      parseChecksums(
+        `${hex}  cctop_linux_amd64.tar.gz`,
+        "cctop_linux_amd64.tar.gz",
+      ),
+    ).toBe("ab".repeat(32));
+  });
 });
 
 describe("extractFromTar", () => {
@@ -156,5 +183,32 @@ describe("extractFromTar", () => {
     expect(bytes(extractFromTar(Bun.gunzipSync(gz), "cctop"))).toEqual(
       bytes(data),
     );
+  });
+
+  test("skips a pax/long-name header and returns the following regular file", () => {
+    // GitHub archives can carry a pax header (typeflag "x") before the file; a
+    // same-named pax entry must be skipped, not returned as the binary.
+    const pax = enc.encode("30 path=cctop\n");
+    const data = enc.encode("real-binary".repeat(200));
+    const tar = tarOf([
+      ["cctop", pax, "x"],
+      ["cctop", data, "0"],
+    ]);
+    expect(bytes(extractFromTar(tar, "cctop"))).toEqual(bytes(data));
+  });
+
+  test("clamps an entry whose size overruns the archive (no over-read)", () => {
+    // A header claiming more bytes than the archive holds must not read past the
+    // end; the clamped short result is rejected downstream by the size guard.
+    const data = enc.encode("x".repeat(600)); // spans two 512-byte blocks
+    const truncated = tarOf([["cctop", data]]).subarray(0, 512 + 400);
+    const got = extractFromTar(truncated, "cctop");
+    expect(got).not.toBeNull();
+    expect(got?.length).toBeLessThanOrEqual(400);
+  });
+
+  test("returns null on a header truncated below one block", () => {
+    const tar = tarOf([["cctop", enc.encode("y".repeat(300))]]);
+    expect(extractFromTar(tar.subarray(0, 200), "cctop")).toBeNull();
   });
 });
