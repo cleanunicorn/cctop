@@ -1,8 +1,9 @@
 // Copyright 2026 Stefan Prodan.
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
+  assertValidOverrides,
   assetName,
   compareVersions,
   extractFromTar,
@@ -210,5 +211,50 @@ describe("extractFromTar", () => {
   test("returns null on a header truncated below one block", () => {
     const tar = tarOf([["cctop", enc.encode("y".repeat(300))]]);
     expect(extractFromTar(tar.subarray(0, 200), "cctop")).toBeNull();
+  });
+});
+
+describe("assertValidOverrides", () => {
+  const saved = {
+    repo: process.env.CCTOP_REPO,
+    version: process.env.CCTOP_VERSION,
+  };
+  const set = (repo?: string, version?: string) => {
+    if (repo === undefined) delete process.env.CCTOP_REPO;
+    else process.env.CCTOP_REPO = repo;
+    if (version === undefined) delete process.env.CCTOP_VERSION;
+    else process.env.CCTOP_VERSION = version;
+  };
+  afterEach(() => set(saved.repo, saved.version));
+
+  test("accepts no overrides", () => {
+    set(undefined, undefined);
+    expect(() => assertValidOverrides()).not.toThrow();
+  });
+
+  test("accepts well-formed overrides", () => {
+    for (const [repo, version] of [
+      ["owner/name", "v0.5.0"],
+      ["stefanprodan/cctop", "0.5.0"],
+      ["a-b.c/d_e", "v1.2.3-rc.1"],
+      ["o/n", "v1.2.3-beta-2"], // hyphenated prerelease identifier
+    ] as const) {
+      set(repo, version);
+      expect(() => assertValidOverrides()).not.toThrow();
+    }
+  });
+
+  test("rejects a malformed repo", () => {
+    set("not a repo!", undefined);
+    expect(() => assertValidOverrides()).toThrow(/CCTOP_REPO/);
+    set("owner/name/extra", undefined);
+    expect(() => assertValidOverrides()).toThrow(/CCTOP_REPO/);
+  });
+
+  test("rejects a malformed version", () => {
+    set(undefined, "latest");
+    expect(() => assertValidOverrides()).toThrow(/CCTOP_VERSION/);
+    set(undefined, "1.2");
+    expect(() => assertValidOverrides()).toThrow(/CCTOP_VERSION/);
   });
 });
