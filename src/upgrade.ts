@@ -293,9 +293,16 @@ export async function runUpgrade(
     console.error(`${RED}error:${RESET} upgrade failed — ${msg(e)}`);
     return 1;
   }
+  // "restart cctop" would be the wrong instruction in the common case: nothing
+  // is running, the user just typed `cctop upgrade`. A cctop that *is* running
+  // elsewhere keeps executing its old inode and says so itself (the footer
+  // notice in app.ts) — but a transient flash is easy to miss, so mention it.
   console.log(
     `${GREEN}✓${RESET} upgraded to ${BOLD}${latest}${RESET} — ` +
-      `restart cctop to run the new version.`,
+      `run ${BOLD}cctop${RESET} to use it.`,
+  );
+  console.log(
+    `${DIM}Already-running instances keep the old version until restarted.${RESET}`,
   );
   return 0;
 }
