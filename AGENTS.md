@@ -27,7 +27,11 @@ exits, while `--json` prints one JSON snapshot and exits.
   reaches the network and replaces cctop's own binary. It never runs from the
   refresh loop — the monitor path never even imports it — so the
   read-only/offline contract above holds for everything that isn't `cctop
-  upgrade`.
+  upgrade`. The TUI's "restart to run the new version" notice does **not**
+  weaken this: it stats its own binary (`src/binary.ts`) to notice the file was
+  swapped underneath it, and never asks the network whether a release exists.
+  Keep it that way — polling GitHub from the refresh loop would break the
+  offline half of the contract.
 - **Zero runtime dependencies.** cctop imports only Bun and OS built-ins
   (`bun:ffi`, `node:fs`, …); `package.json` has no `dependencies` field (the
   devDependencies are just Biome/tsc/types). Do not add npm packages — keep it
@@ -81,6 +85,10 @@ src/notify.ts   "needs you" notifications: pure busy→idle transition tracking
 src/upgrade.ts  `cctop upgrade`: the self-updater — resolves the latest release,
                 verifies its checksum, and atomically swaps the standalone binary
                 (the one place cctop hits the network / rewrites its own binary)
+src/binary.ts   facts about the file cctop runs from: isCompiledBinary() and the
+                inode+mtime+size stamp the TUI watches to notice its binary was
+                swapped ("restart to run the new version"). Local stats only —
+                safe for the monitor to import, unlike upgrade.ts
 src/proc.ts     process-table facade: picks the platform impl at startup and
                 re-exports listAllProcesses(), cwdOf(), netCounters(), parseProcNetDev()
 src/proc/       per-platform sources behind that facade: darwin.ts (libproc FFI),

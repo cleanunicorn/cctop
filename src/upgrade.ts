@@ -13,6 +13,7 @@
 // command that updates that kind of install instead.
 
 import { chmodSync, realpathSync, renameSync, unlinkSync } from "node:fs";
+import { isCompiledBinary } from "./binary.ts";
 import { BOLD, DIM, GREEN, RED, RESET } from "./format.ts";
 
 // Where releases live. Overridable so forks (and tests) can point elsewhere
@@ -155,20 +156,6 @@ export function extractFromTar(
     off = dataStart + Math.ceil(size / TAR_BLOCK) * TAR_BLOCK;
   }
   return null;
-}
-
-// --- Runtime detection ---------------------------------------------------
-
-// A compiled standalone binary runs *as itself*, so process.execPath is the
-// cctop program; a source or `bun install -g` run executes under the bun
-// interpreter, so execPath is the bun runtime. Newer Bun exposes
-// Bun.isStandaloneExecutable directly — trust it when present, fall back to the
-// execPath heuristic on older runtimes (it is undefined before ~1.3.x).
-function isCompiledBinary(): boolean {
-  const flag = (Bun as { isStandaloneExecutable?: boolean })
-    .isStandaloneExecutable;
-  if (typeof flag === "boolean") return flag;
-  return !/[/\\]bun(-debug)?(\.exe)?$/i.test(process.execPath);
 }
 
 // --- Network + swap ------------------------------------------------------

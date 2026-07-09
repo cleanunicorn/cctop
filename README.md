@@ -97,6 +97,10 @@ It fetches the latest release for your OS/arch, verifies its checksum, and swaps
 the binary atomically; `cctop upgrade --check` only reports whether a newer
 version is available. (Re-running the install script does the same thing.)
 
+Swapping the binary leaves any *already running* cctop on the old version until
+it restarts — so a TUI running elsewhere notices its binary changed and says
+so in the footer. It checks by stat-ing its own file, never by calling home.
+
 With Homebrew:
 
 ```sh
