@@ -26,9 +26,12 @@ waiting for input.
   while agents run. Works with tmux `monitor-bell` window flags too.
 - **Status at a glance** — busy sessions are green, idle red; CPU and context
   heat toward red as they climb; the selected session is marked with a blue bar.
-- **Which session rang?** — a session that stops and rings your terminal bell
-  wears a 🔔 for 30 seconds and is named in the summary, so a bell coming out of
-  one of a dozen panes is never a mystery.
+- **Which session rang?** — the other half of that ping: a session that stops
+  wears a 🔔 for 30 seconds, the summary keeps naming the last one to ding
+  (`Bell: 🔔 cctop · pid 1737989 · 4s ago`) until you answer it, and `b` jumps
+  straight to it. A bell out of one of a dozen panes is never a mystery, even
+  if you were away when it rang — and it reads the same whether the bell came
+  from cctop's `n` notifier or from Claude Code itself.
 - **Weekly usage limits** *(opt-in)* — show your Claude subscription's 5h/7d
   rate-limit usage in the summary line.
 - **Quit a runaway session** in place (`x` → `SIGTERM`, with confirm), or
@@ -118,6 +121,7 @@ While the TUI is running:
 | `↑`/`k` `↓`/`j` | move the selection                                               |
 | `PgUp`/`PgDn`   | jump 10 rows                                                     |
 | `g` / `G`       | jump to top / bottom                                             |
+| `b`             | jump to the session that rang last (the one on the `Bell:` line) |
 | `enter`         | open the detail view for the selected session                    |
 | `h`             | open the session history dashboard (`↹` tabs, `r` rescan)        |
 | `esc`           | leave the detail view / close an overlay                         |

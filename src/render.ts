@@ -99,12 +99,15 @@ const safe = (s: string | null | undefined, fallback = "-") =>
 // blocks, so a fresh session reads as fresh instead of broken.
 const isNew = (r: Instance) => !r.prompt && !r.lastTurn && !r.contextTokens;
 
-// How long a session wears its bell after it rings. Claude Code rings once and
-// the sound is gone, so the marker is a decaying echo of that ring: it answers
-// "I just heard a bell — which session was it?" and then gets out of the way,
-// leaving the row a plain idle dot. Nothing is stored and nothing is dismissed,
-// so cctop shows the same thing whether it has been running for a second or a
-// week — a bell that has to be cleared would be a bell that lies after a restart.
+// How long a session's *row* wears its bell after it rings. Claude Code rings
+// once and the sound is gone, so the row glyph is a decaying echo of that ring:
+// it answers "I just heard a bell — which session was it?" and then gets out of
+// the way, leaving a plain idle dot. The summary's Bell: line does not decay —
+// it names the last session to ding for as long as it is still waiting, so a
+// ding you missed while away is still answered. Both are derived from bellAt:
+// nothing is stored and nothing is dismissed, so cctop shows the same thing
+// whether it has been running for a second or a week — a bell that had to be
+// cleared would be a bell that lies after a restart.
 export const BELL_MS = 30_000;
 
 // A session is ringing if it stopped within the decay window. A bellAt in the
@@ -308,23 +311,32 @@ export function buildFrame(
   const limits = usageLine(usage ?? null, nowMs);
   if (limits) summary.push(limits);
 
-  // "Bell: 🔔 canary-c7 · 4s ago" — the session behind the bell you just heard,
-  // named so you don't have to hunt the table for the glyph. Sessions ring one
-  // at a time, but two can ring inside the decay window, so list them newest
-  // first. Last in the summary (nearest the table) and omitted entirely when
-  // nothing is ringing, so it never shifts the lines above it.
-  const bells = view
-    .filter((v) => v.ringing)
-    .sort((a, b) => b.raw.bellAt! - a.raw.bellAt!)
-    .map(({ raw }) => {
-      const name = safe(raw.sessionName ?? shortProject(raw.project), "?");
-      const ago = formatDuration((nowMs - raw.bellAt!) / 1000);
-      return `${name} ${DIM}· ${ago} ago${RESET}`;
-    });
-  if (bells.length)
+  // "Bell: 🔔 cctop · pid 1737989 · 4m ago" — the session that dinged last.
+  // Identified the way the table identifies it: PROJECT says what it is, PID
+  // says which row, and the PID is the only thing here that cannot collide (two
+  // sessions on the same project are ordinary). Deliberately *not* sessionName —
+  // it appears in no column, so a name like "cctop-92" would send you hunting.
+  //
+  // Unlike the row's own bell, this does not decay: it holds the session until
+  // it goes busy again, which clears its bellAt and hands the line to the next
+  // one still waiting. So it stays true for a ding you missed an hour ago, and
+  // it walks the queue as you answer them. Only one entry — the most recent —
+  // since the row glyphs already flag every session that rang inside the window,
+  // and a fixed-shape line keeps the summary from jittering. Last in the summary
+  // (nearest the table) and dropped when nothing waits, so it never shifts the
+  // lines above it.
+  const dinged = view
+    .filter((v) => v.raw.bellAt != null)
+    .sort((a, b) => b.raw.bellAt! - a.raw.bellAt!)[0];
+  if (dinged) {
+    const { raw } = dinged;
+    const project = safe(shortProject(raw.project), "?");
+    const ago = formatDuration((nowMs - raw.bellAt!) / 1000);
     summary.push(
-      `${DIM}Bell:${RESET} ${RED}${BELL}${RESET} ${bells.join("  ")}`,
+      `${DIM}Bell:${RESET} ${RED}${BELL}${RESET} ${project} ` +
+        `${DIM}· pid ${raw.pid} · ${ago} ago${RESET}`,
     );
+  }
 
   // widths use the plain cell text (color is added afterward); the state
   // column is the tree gutter, 2 wide — a status dot, or a branch plus a

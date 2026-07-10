@@ -539,24 +539,16 @@ describe("bell marker", () => {
     expect(line).not.toContain(`${RED}●${RESET}`);
   });
 
-  test("names the ringing session in the summary", () => {
-    const frame = buildFrame(
-      [idle({ sessionName: "canary-c7", bellAt: Date.now() - 4_000 })],
-      200,
-    );
-    const bell = frame.summary
-      .map(stripAnsi)
-      .find((l) => l.startsWith("Bell:"));
-    expect(bell).toBe(`Bell: ${BELL} canary-c7 · 4s ago`);
-  });
-
-  test("falls back to the project when a session has no name", () => {
+  test("identifies the ringing session by project and pid", () => {
+    // sessionName appears in no column, so the line must not use it — pid is the
+    // only identifier here that is both unique and visible in the table
     const frame = buildFrame(
       [
         idle({
-          sessionName: null,
+          pid: 1_737_989,
+          sessionName: "cctop-92",
           project: "/Users/alice/src/cctop",
-          bellAt: Date.now() - 1_000,
+          bellAt: Date.now() - 4_000,
         }),
       ],
       200,
@@ -564,30 +556,70 @@ describe("bell marker", () => {
     const bell = frame.summary
       .map(stripAnsi)
       .find((l) => l.startsWith("Bell:"));
-    expect(bell).toBe(`Bell: ${BELL} cctop · 1s ago`);
+    expect(bell).toBe(`Bell: ${BELL} cctop · pid 1737989 · 4s ago`);
+    expect(bell).not.toContain("cctop-92");
   });
 
-  test("lists several sessions ringing at once, newest first", () => {
+  test("pid tells apart two dings on the same project", () => {
     const now = Date.now();
     const frame = buildFrame(
       [
-        idle({ sessionId: "a", sessionName: "older", bellAt: now - 20_000 }),
-        idle({ sessionId: "b", sessionName: "newer", bellAt: now - 2_000 }),
+        idle({ sessionId: "a", pid: 111, bellAt: now - 20_000 }),
+        idle({ sessionId: "b", pid: 222, bellAt: now - 2_000 }),
       ],
+      200,
+    );
+    // both rows read "cctop" in PROJECT; only the newest is named, by its pid
+    const bell = frame.summary
+      .map(stripAnsi)
+      .find((l) => l.startsWith("Bell:"));
+    expect(bell).toBe(`Bell: ${BELL} cctop · pid 222 · 2s ago`);
+  });
+
+  test("falls back to ? when a session has no project", () => {
+    const frame = buildFrame(
+      [idle({ pid: 42, project: null, bellAt: Date.now() - 1_000 })],
       200,
     );
     const bell = frame.summary
       .map(stripAnsi)
       .find((l) => l.startsWith("Bell:"));
-    expect(bell).toBe(`Bell: ${BELL} newer · 2s ago  older · 20s ago`);
+    expect(bell).toBe(`Bell: ${BELL} ? · pid 42 · 1s ago`);
   });
 
-  test("decays back to a plain dot once the window has passed", () => {
-    const frame = buildFrame([idle({ bellAt: Date.now() - BELL_MS - 1 })], 200);
-    expect(frame.groups[0].lines[0]).toContain(`${RED}●${RESET}`);
-    expect(frame.summary.some((l) => stripAnsi(l).startsWith("Bell:"))).toBe(
-      false,
+  test("holds a ding from long ago until its session goes busy again", () => {
+    const now = Date.now();
+    const long = buildFrame(
+      [idle({ pid: 111, bellAt: now - 90 * 60_000 })],
+      200,
     );
+    expect(long.summary.map(stripAnsi).find((l) => l.startsWith("Bell:"))).toBe(
+      `Bell: ${BELL} cctop · pid 111 · 1h ago`,
+    );
+
+    // answering it turns the session busy, which clears bellAt in collectRows;
+    // the line then hands off to whoever is still waiting
+    const answered = buildFrame(
+      [
+        baseRow({ sessionId: "a", pid: 111, state: "busy", bellAt: null }),
+        idle({ sessionId: "b", pid: 222, bellAt: now - 5_000 }),
+      ],
+      200,
+    );
+    expect(
+      answered.summary.map(stripAnsi).find((l) => l.startsWith("Bell:")),
+    ).toBe(`Bell: ${BELL} cctop · pid 222 · 5s ago`);
+  });
+
+  test("the row glyph decays, but the summary keeps naming the ding", () => {
+    const frame = buildFrame([idle({ bellAt: Date.now() - BELL_MS - 1 })], 200);
+    // the row is back to a plain idle dot ...
+    expect(frame.groups[0].lines[0]).toContain(`${RED}●${RESET}`);
+    expect(frame.groups[0].lines[0]).not.toContain(BELL);
+    // ... while the header still names who rang, however long ago
+    expect(
+      frame.summary.map(stripAnsi).find((l) => l.startsWith("Bell:")),
+    ).toBe(`Bell: ${BELL} cctop · pid 12345 · 30s ago`);
   });
 
   test("never rings a busy session", () => {

@@ -418,6 +418,29 @@ export async function runApp(opts: AppOptions): Promise<void> {
         }
         break;
       }
+      case "b": {
+        // Jump to the session named on the summary's Bell: line — the last one
+        // to ding. Picks the newest bellAt among the *displayed* rows, so the
+        // jump can only ever land on a row the user can see; when a filter hides
+        // it, say so rather than reporting that nothing rang.
+        const rows = displayRows();
+        let best = -1;
+        rows.forEach((r, i) => {
+          if (r.bellAt != null && (best < 0 || r.bellAt > rows[best].bellAt!))
+            best = i;
+        });
+        if (best < 0) {
+          flash(
+            state.rows.some((r) => r.bellAt != null)
+              ? "the session that rang is hidden by the filter"
+              : "no session is waiting on you",
+          );
+          break;
+        }
+        state.selectedIndex = best;
+        state.selectedKey = rowKey(rows[best]);
+        break;
+      }
       case "/":
         state.mode = "filter";
         state.filterInput = state.filter ?? "";
@@ -933,6 +956,7 @@ export async function runApp(opts: AppOptions): Promise<void> {
       key("↓ / j", "move down"),
       key("PgUp/PgDn", "jump 10 rows"),
       key("g / G", "top / bottom"),
+      key("b", "jump to the session that rang last"),
       key("enter", "open detail view"),
       key("esc", "back / close overlay"),
       "",
@@ -1018,7 +1042,7 @@ export async function runApp(opts: AppOptions): Promise<void> {
             state.detailEnded
             ? "session ended · ↑↓ scroll · esc back · q exit"
             : "↑↓ scroll · esc back · x quit · f free ports · q exit"
-          : `↑↓ move · enter detail · / filter · s sort:${sort} · n bell:${state.notify ? "on" : "off"} · h history · x quit · ? help · q exit`;
+          : `↑↓ move · enter detail · / filter · s sort:${sort} · n bell:${state.notify ? "on" : "off"} · b goto bell · h history · x quit · ? help · q exit`;
     // the history view doesn't auto-refresh, so drop the "every Ns · clock" part
     const left =
       state.mode === "history"

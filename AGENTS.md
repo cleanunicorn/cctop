@@ -172,7 +172,10 @@ the source in `collect/process-tree.ts` (`hostApp`, `HOST_SKIP`, `isClaudeProc`)
    bell. That is the whole basis of the 🔔 marker (`bellTime()` in
    `collect/sessions.ts`, `BELL_MS` + `isRinging()` in `render.ts`): it is
    derived, not recorded, so it survives a cctop restart and needs nothing
-   dismissed. **The trap:** a session *also* writes `status: "idle"` ~100ms after
+   dismissed. The row glyph decays after `BELL_MS`; the summary's `Bell:` line
+   does not — it names the most recent `bellAt` for as long as that session is
+   still waiting, and hands off to the next one when the session goes busy (which
+   clears its `bellAt`). **The trap:** a session *also* writes `status: "idle"` ~100ms after
    `startedAt`, before it has run a turn and without ringing anything, so
    `bellTime()` ignores a flip landing inside a startup grace. Drop that guard
    and every freshly launched session rings for 30s. The bell glyph is two
