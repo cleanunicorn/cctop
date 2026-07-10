@@ -16,13 +16,38 @@ interface Session {
   kind?: string;
   status?: string;
   updatedAt?: number;
+  statusUpdatedAt?: number;
   name?: string;
 }
 
 export type { Session };
 
+// A session writes an "idle" status ~100ms into startup, before it has run a
+// single turn and without ringing anything. Requiring the flip to land clear of
+// that write is what keeps a freshly launched (or resumed) session from ringing.
+const STARTUP_GRACE_MS = 2_000;
+
+// When this session last stopped working and rang the terminal bell for you, or
+// null if it is still working.
+//
+// Claude Code rewrites <pid>.json only when `status` flips — there is no
+// heartbeat — so `statusUpdatedAt` on a stopped session is the exact instant it
+// stopped, which is the instant it rings. Anything that is not "busy" counts as
+// stopped, matching stateDot(): Claude Code coins new statuses over time, and a
+// session that isn't working may want you whatever it calls that.
+//
+// Imperfect in one direction: interrupting a turn (esc) also flips the status,
+// and no bell rings for that. It reads as a bell for BELL_MS, then decays.
+export function bellTime(s: Session): number | null {
+  if (!s.status || s.status === "busy" || s.statusUpdatedAt == null)
+    return null;
+  const sinceStart = s.statusUpdatedAt - s.startedAt;
+  return sinceStart > STARTUP_GRACE_MS ? s.statusUpdatedAt : null;
+}
+
 // ~/.claude/sessions/<pid>.json is written by each running Claude Code:
-// { pid, sessionId, cwd, startedAt, version, kind, status, updatedAt, name }
+// { pid, sessionId, cwd, startedAt, version, kind, status, updatedAt,
+//   statusUpdatedAt, name }
 export function validSession(raw: any, file: string): Session | null {
   const filePid = Number(file.slice(0, -".json".length));
   if (
@@ -47,6 +72,9 @@ export function validSession(raw: any, file: string): Session | null {
     kind: optionalString(raw.kind),
     status: optionalString(raw.status),
     updatedAt: Number.isFinite(raw.updatedAt) ? raw.updatedAt : undefined,
+    statusUpdatedAt: Number.isFinite(raw.statusUpdatedAt)
+      ? raw.statusUpdatedAt
+      : undefined,
     name: optionalString(raw.name),
   };
 }

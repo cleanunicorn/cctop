@@ -62,6 +62,7 @@ const row = (overrides: Partial<Instance> = {}): Instance => ({
   contextTokens: 10_000,
   lastActivity: null,
   lastMs: 0,
+  bellAt: null,
   prompt: null,
   promptAt: null,
   lastTurn: null,
@@ -96,6 +97,7 @@ describe("collect helpers", () => {
           kind: "interactive",
           status: "busy",
           updatedAt: 1_700_000_010_000,
+          statusUpdatedAt: 1_700_000_010_000,
           name: "cctop-work",
         },
         "12345.json",
@@ -109,6 +111,7 @@ describe("collect helpers", () => {
       kind: "interactive",
       status: "busy",
       updatedAt: 1_700_000_010_000,
+      statusUpdatedAt: 1_700_000_010_000,
       name: "cctop-work",
     });
   });
@@ -162,6 +165,7 @@ describe("collect helpers", () => {
           kind: null,
           status: false,
           updatedAt: "now",
+          statusUpdatedAt: null,
           name: "valid name",
         },
         "12345.json",
@@ -175,8 +179,73 @@ describe("collect helpers", () => {
       kind: undefined,
       status: undefined,
       updatedAt: undefined,
+      statusUpdatedAt: undefined,
       name: "valid name",
     });
+  });
+});
+
+// bellTime reads the instant a session stopped working — the instant Claude Code
+// rings its terminal bell — out of the registry's status/statusUpdatedAt pair.
+// The startup write is the trap: every session writes "idle" a few ms after it
+// starts, having run nothing and rung nothing.
+describe("bell time", () => {
+  const started = 1_700_000_000_000;
+  const session = (over: Record<string, unknown> = {}) => ({
+    pid: 12345,
+    sessionId: "session-1",
+    cwd: "/tmp/project",
+    startedAt: started,
+    ...over,
+  });
+
+  test("reads the moment a stopped session last flipped status", () => {
+    expect(
+      __test.bellTime(
+        session({ status: "idle", statusUpdatedAt: started + 60_000 }),
+      ),
+    ).toBe(started + 60_000);
+  });
+
+  test("stays silent while a session is busy", () => {
+    expect(
+      __test.bellTime(
+        session({ status: "busy", statusUpdatedAt: started + 60_000 }),
+      ),
+    ).toBeNull();
+  });
+
+  test("stays silent for the idle status written at startup", () => {
+    // observed at +94ms on a real launch; nothing has run, so nothing rang
+    expect(
+      __test.bellTime(
+        session({ status: "idle", statusUpdatedAt: started + 94 }),
+      ),
+    ).toBeNull();
+    // and at the grace boundary itself
+    expect(
+      __test.bellTime(
+        session({ status: "idle", statusUpdatedAt: started + 2_000 }),
+      ),
+    ).toBeNull();
+  });
+
+  test("rings for any status that is not busy", () => {
+    // Claude Code coins new statuses over time; anything that is not "busy" is a
+    // session that stopped and may want you, matching stateDot()
+    expect(
+      __test.bellTime(
+        session({ status: "waiting", statusUpdatedAt: started + 60_000 }),
+      ),
+    ).toBe(started + 60_000);
+  });
+
+  test("stays silent when the registry carries no status timestamp", () => {
+    // an older Claude Code that does not write statusUpdatedAt
+    expect(__test.bellTime(session({ status: "idle" }))).toBeNull();
+    expect(
+      __test.bellTime(session({ statusUpdatedAt: started + 60_000 })),
+    ).toBeNull();
   });
 });
 

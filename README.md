@@ -26,6 +26,9 @@ waiting for input.
   while agents run. Works with tmux `monitor-bell` window flags too.
 - **Status at a glance** — busy sessions are green, idle red; CPU and context
   heat toward red as they climb; the selected session is marked with a blue bar.
+- **Which session rang?** — a session that stops and rings your terminal bell
+  wears a 🔔 for 30 seconds and is named in the summary, so a bell coming out of
+  one of a dozen panes is never a mystery.
 - **Weekly usage limits** *(opt-in)* — show your Claude subscription's 5h/7d
   rate-limit usage in the summary line.
 - **Quit a runaway session** in place (`x` → `SIGTERM`, with confirm), or

@@ -48,6 +48,9 @@ export interface Instance {
   contextTokens: number | null;
   lastActivity: string | null;
   lastMs: number;
+  // unix ms of the moment this session stopped and rang its terminal bell for
+  // you; null while it is busy. See bellTime() in collect/sessions.ts.
+  bellAt: number | null;
   prompt: string | null;
   promptAt: number | null; // unix ms of the last user prompt
   lastTurn: string | null; // the action the agent's most recent turn took

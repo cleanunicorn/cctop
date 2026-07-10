@@ -4,15 +4,18 @@
 import { describe, expect, test } from "bun:test";
 import type { Instance, Usage } from "../src/collect.ts";
 import {
+  BELL,
   BLUE,
   BOLD,
   CYAN,
   RED,
   RESET,
   stripAnsi,
+  visLen,
   YELLOW,
 } from "../src/format.ts";
 import {
+  BELL_MS,
   buildFrame,
   renderDetail,
   resolveDetail,
@@ -38,6 +41,7 @@ const baseRow = (overrides: Partial<Instance> = {}): Instance => ({
   contextTokens: 123_456,
   lastActivity: "2026-06-13T12:00:00.000Z",
   lastMs: Date.now(),
+  bellAt: null,
   prompt: "implement tests",
   promptAt: Date.now() - 120_000,
   lastTurn: "Edit: render.ts",
@@ -518,5 +522,101 @@ describe("usage limits line", () => {
   test("returns null when there is no usable data", () => {
     expect(usageLine(null, NOW)).toBeNull();
     expect(usageLine(usage(), NOW)).toBeNull();
+  });
+});
+
+// The bell marks the session behind the terminal bell you just heard: a red 🔔
+// in the state gutter for BELL_MS after it stopped, plus a summary line naming
+// it. Stateless and decaying, so these assert on bellAt relative to now.
+describe("bell marker", () => {
+  const idle = (over: Partial<Instance> = {}) =>
+    baseRow({ state: "idle", ...over });
+
+  test("swaps the status dot for a bell while a session is ringing", () => {
+    const frame = buildFrame([idle({ bellAt: Date.now() - 4_000 })], 200);
+    const line = frame.groups[0].lines[0];
+    expect(line).toContain(`${RED}${BELL}${RESET}`);
+    expect(line).not.toContain(`${RED}●${RESET}`);
+  });
+
+  test("names the ringing session in the summary", () => {
+    const frame = buildFrame(
+      [idle({ sessionName: "canary-c7", bellAt: Date.now() - 4_000 })],
+      200,
+    );
+    const bell = frame.summary
+      .map(stripAnsi)
+      .find((l) => l.startsWith("Bell:"));
+    expect(bell).toBe(`Bell: ${BELL} canary-c7 · 4s ago`);
+  });
+
+  test("falls back to the project when a session has no name", () => {
+    const frame = buildFrame(
+      [
+        idle({
+          sessionName: null,
+          project: "/Users/alice/src/cctop",
+          bellAt: Date.now() - 1_000,
+        }),
+      ],
+      200,
+    );
+    const bell = frame.summary
+      .map(stripAnsi)
+      .find((l) => l.startsWith("Bell:"));
+    expect(bell).toBe(`Bell: ${BELL} cctop · 1s ago`);
+  });
+
+  test("lists several sessions ringing at once, newest first", () => {
+    const now = Date.now();
+    const frame = buildFrame(
+      [
+        idle({ sessionId: "a", sessionName: "older", bellAt: now - 20_000 }),
+        idle({ sessionId: "b", sessionName: "newer", bellAt: now - 2_000 }),
+      ],
+      200,
+    );
+    const bell = frame.summary
+      .map(stripAnsi)
+      .find((l) => l.startsWith("Bell:"));
+    expect(bell).toBe(`Bell: ${BELL} newer · 2s ago  older · 20s ago`);
+  });
+
+  test("decays back to a plain dot once the window has passed", () => {
+    const frame = buildFrame([idle({ bellAt: Date.now() - BELL_MS - 1 })], 200);
+    expect(frame.groups[0].lines[0]).toContain(`${RED}●${RESET}`);
+    expect(frame.summary.some((l) => stripAnsi(l).startsWith("Bell:"))).toBe(
+      false,
+    );
+  });
+
+  test("never rings a busy session", () => {
+    // collectRows leaves bellAt null while busy; the renderer must not invent one
+    const frame = buildFrame([baseRow({ state: "busy", bellAt: null })], 200);
+    expect(frame.groups[0].lines[0]).not.toContain(BELL);
+    expect(frame.summary.some((l) => stripAnsi(l).startsWith("Bell:"))).toBe(
+      false,
+    );
+  });
+
+  test("keeps the columns aligned when a session rings", () => {
+    // 🔔 is two columns wide — exactly the state gutter — so a ringing row must
+    // measure the same as a dotted one and nothing to its right shifts
+    const now = Date.now();
+    const frame = buildFrame(
+      [
+        idle({ sessionId: "a", bellAt: now - 4_000 }),
+        idle({ sessionId: "b", bellAt: null }),
+      ],
+      200,
+    );
+    const [ringing, quiet] = frame.groups.map((g) => g.lines[0]);
+    expect(visLen(ringing)).toBe(visLen(quiet));
+  });
+
+  test("carries the bell into the detail view, but not once ended", () => {
+    const row = idle({ bellAt: Date.now() - 4_000 });
+    expect(renderDetail(row, 80)[0]).toContain(`${RED}${BELL}${RESET}`);
+    expect(renderDetail(row, 80, true)[0]).not.toContain(BELL);
   });
 });
