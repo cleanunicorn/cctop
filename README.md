@@ -27,8 +27,8 @@ waiting for input.
 - **Status at a glance** — busy sessions are green, idle red; CPU and context
   heat toward red as they climb; the selected session is marked with a blue bar.
 - **Which session rang?** — the other half of that ping: a session that stops
-  wears a 🔔 for 30 seconds, the summary keeps naming the last one to ding
-  (`Bell: 🔔 cctop · pid 1737989 · 4s ago`) until you answer it, and `b` jumps
+  wears a hollow `○` for 30 seconds, the summary keeps naming the last one to
+  ding (`Bell: ○ cctop · pid 1737989 · 4s ago`) until you answer it, and `b` jumps
   straight to it. A bell out of one of a dozen panes is never a mystery, even
   if you were away when it rang — and it reads the same whether the bell came
   from cctop's `n` notifier or from Claude Code itself.

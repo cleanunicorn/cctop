@@ -122,20 +122,19 @@ export function tildePath(path: string) {
 const stateColor = (state: string) =>
   state === "busy" ? BRIGHT_GREEN : state === "?" ? DIM : RED;
 
-// Marks the session that rang the terminal bell. Two columns wide by
-// Bun.stringWidth (🔔 is Unicode East-Asian Wide) — the width of the state
-// gutter — so it swaps in for the one-column dot plus its trailing pad. Note the
-// caveats of an emoji here: a color-emoji font renders it in its own colors and
-// ignores the surrounding SGR (so, unlike the dots, the bell does not read as
-// red), and a terminal that renders emoji at one cell instead of two shifts the
-// columns to its right on a ringing row. The shape change (dot → bell) is what
-// carries "needs you"; the color does not.
-export const BELL = "🔔";
+// Marks the session that rang the terminal bell: a hollow circle against the
+// filled ● of a working/idle session — the dot "opened up", waiting on you.
+// Single-width like the ● it replaces, so gutter alignment is automatic, and a
+// plain geometric glyph (not an emoji), so it honors the surrounding SGR and
+// stateColor() paints it red. Note it shares its shape with the ended-session
+// marker (renderDetail's dim ○): color tells them apart — red ○ rang and is
+// live, dim ○ has exited — and they never share a gutter, so it reads cleanly.
+export const BELL = "○";
 
 // the state as a status dot rather than a word; "·" only for the unknown state.
-// `ringing` swaps the dot for a bell on a session that just stopped and rang for
-// you. The state color still wraps it, but see BELL: an emoji glyph may ignore
-// it — the dot→bell shape change, not the color, is what signals the ring.
+// `ringing` swaps the filled dot for a hollow one on a session that just stopped
+// and rang for you; the state color carries over, so the busy/idle signal
+// survives the swap and the hollow ring is what marks it as needing you.
 export const stateDot = (state: string, ringing = false) =>
   state === "?"
     ? `${DIM}·${RESET}`

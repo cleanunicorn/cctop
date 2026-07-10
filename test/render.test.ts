@@ -526,7 +526,7 @@ describe("usage limits line", () => {
   });
 });
 
-// The bell marks the session behind the terminal bell you just heard: a red 🔔
+// The bell marks the session behind the terminal bell you just heard: a red ○
 // in the state gutter for BELL_MS after it stopped, plus a summary line naming
 // it. Stateless and decaying, so these assert on bellAt relative to now.
 describe("bell marker", () => {
@@ -640,8 +640,8 @@ describe("bell marker", () => {
   });
 
   test("keeps the columns aligned when a session rings", () => {
-    // 🔔 is two columns wide — exactly the state gutter — so a ringing row must
-    // measure the same as a dotted one and nothing to its right shifts
+    // ○ is single-width like the ● it replaces, so a ringing row must measure
+    // the same as a dotted one and nothing to its right shifts
     const now = Date.now();
     const frame = buildFrame(
       [
@@ -657,7 +657,11 @@ describe("bell marker", () => {
   test("carries the bell into the detail view, but not once ended", () => {
     const row = idle({ bellAt: Date.now() - 4_000 });
     expect(renderDetail(row, 80)[0]).toContain(`${RED}${BELL}${RESET}`);
-    expect(renderDetail(row, 80, true)[0]).not.toContain(BELL);
+    // an ended session's header is a *dim* ○ (same glyph as the bell), so assert
+    // the absence of the red-wrapped bell specifically, not the bare glyph
+    expect(renderDetail(row, 80, true)[0]).not.toContain(
+      `${RED}${BELL}${RESET}`,
+    );
   });
 });
 

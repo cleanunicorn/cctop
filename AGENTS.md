@@ -169,7 +169,7 @@ the source in `collect/process-tree.ts` (`hostApp`, `HOST_SKIP`, `isClaudeProc`)
 7. **The session registry has no heartbeat.** `sessions/<pid>.json` is rewritten
    only when `status` flips, so `statusUpdatedAt` is the *exact* instant a
    session stopped working — which is the instant Claude Code rings the terminal
-   bell. That is the whole basis of the 🔔 marker (`bellTime()` in
+   bell. That is the whole basis of the `○` marker (`bellTime()` in
    `collect/sessions.ts`, `BELL_MS` + `isRinging()` in `render.ts`): it is
    derived, not recorded, so it survives a cctop restart and needs nothing
    dismissed. The row glyph decays after `BELL_MS`; the summary's `Bell:` line
@@ -178,9 +178,13 @@ the source in `collect/process-tree.ts` (`hostApp`, `HOST_SKIP`, `isClaudeProc`)
    clears its `bellAt`). **The trap:** a session *also* writes `status: "idle"` ~100ms after
    `startedAt`, before it has run a turn and without ringing anything, so
    `bellTime()` ignores a flip landing inside a startup grace. Drop that guard
-   and every freshly launched session rings for 30s. The bell glyph is two
-   columns wide — exactly the state gutter — so it replaces the dot *and* its
-   trailing pad; a one-column glyph there would shift every column to its right.
+   and every freshly launched session rings for 30s. The bell glyph (`BELL` in
+   `format.ts`) is a hollow `○` — single-width like the filled `●` it replaces
+   (gutter alignment is automatic) and a plain geometric glyph, so it honors the
+   SGR and renders red (an emoji would ignore the color and vary in width). It
+   deliberately shares its shape with `renderDetail`'s dim `○` ended-session
+   marker; color separates them (red = rang and live, dim = exited) and they
+   never share a gutter.
 
 ## Conventions
 

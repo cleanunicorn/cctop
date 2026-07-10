@@ -323,7 +323,7 @@ export function buildFrame(
   const limits = usageLine(usage ?? null, nowMs);
   if (limits) summary.push(limits);
 
-  // "Bell: 🔔 cctop · pid 1737989 · 4m ago" — the session that dinged last.
+  // "Bell: ○ cctop · pid 1737989 · 4m ago" — the session that dinged last.
   // Identified the way the table identifies it: PROJECT says what it is, PID
   // says which row, and the PID is the only thing here that cannot collide (two
   // sessions on the same project are ordinary). Deliberately *not* sessionName —
