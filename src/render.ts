@@ -339,12 +339,11 @@ export function buildFrame(
   // lines above it.
   const dinged = newestBell(rows);
   if (dinged) {
-    const raw = dinged;
-    const project = safe(shortProject(raw.project), "?");
-    const ago = formatDuration((nowMs - raw.bellAt!) / 1000);
+    const project = safe(shortProject(dinged.project), "?");
+    const ago = formatDuration((nowMs - dinged.bellAt!) / 1000);
     summary.push(
       `${DIM}Bell:${RESET} ${RED}${BELL}${RESET} ${project} ` +
-        `${DIM}· pid ${raw.pid} · ${ago} ago${RESET}`,
+        `${DIM}· pid ${dinged.pid} · ${ago} ago${RESET}`,
     );
   }
 
