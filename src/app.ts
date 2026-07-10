@@ -427,15 +427,23 @@ export async function runApp(opts: AppOptions): Promise<void> {
         const rows = displayRows();
         const target = newestBell(rows);
         if (!target) {
+          // yellow: the keypress had nothing to act on, matching x/f's no-op
+          // feedback ("no orphan ports left to free")
           flash(
             state.rows.some((r) => r.bellAt != null)
               ? "the session that rang is hidden by the filter"
               : "no session is waiting on you",
+            YELLOW,
           );
           break;
         }
+        const key = rowKey(target);
+        // already there (the common case — a ringing row sorts near the top):
+        // acknowledge the keypress so it doesn't read as a dead key
+        if (state.selectedKey === key)
+          flash("already on the session that rang");
         state.selectedIndex = rows.indexOf(target);
-        state.selectedKey = rowKey(target);
+        state.selectedKey = key;
         break;
       }
       case "/":
@@ -953,7 +961,7 @@ export async function runApp(opts: AppOptions): Promise<void> {
       key("↓ / j", "move down"),
       key("PgUp/PgDn", "jump 10 rows"),
       key("g / G", "top / bottom"),
-      key("b", "jump to the session that rang last"),
+      key("b", "jump to the session that rang last (list view)"),
       key("enter", "open detail view"),
       key("esc", "back / close overlay"),
       "",
@@ -1039,7 +1047,7 @@ export async function runApp(opts: AppOptions): Promise<void> {
             state.detailEnded
             ? "session ended · ↑↓ scroll · esc back · q exit"
             : "↑↓ scroll · esc back · x quit · f free ports · q exit"
-          : `↑↓ move · enter detail · / filter · s sort:${sort} · n bell:${state.notify ? "on" : "off"} · b goto bell · h history · x quit · ? help · q exit`;
+          : `↑↓ move · enter detail · / filter · s sort:${sort} · n notify:${state.notify ? "on" : "off"} · b goto bell · h history · x quit · ? help · q exit`;
     // the history view doesn't auto-refresh, so drop the "every Ns · clock" part
     const left =
       state.mode === "history"
