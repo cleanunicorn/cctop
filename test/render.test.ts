@@ -540,6 +540,13 @@ describe("bell marker", () => {
     expect(line).not.toContain(`${RED}●${RESET}`);
   });
 
+  test("still rings for a bellAt in the future (skewed clock)", () => {
+    // isRinging reads a future bellAt as ringing (nowMs - bellAt is negative,
+    // which is < BELL_MS); a Math.abs/clamp refactor would silently break this
+    const frame = buildFrame([idle({ bellAt: Date.now() + 10_000 })], 200);
+    expect(frame.groups[0].lines[0]).toContain(`${RED}${BELL}${RESET}`);
+  });
+
   test("identifies the ringing session by project and pid", () => {
     // sessionName appears in no column, so the line must not use it — pid is the
     // only identifier here that is both unique and visible in the table
