@@ -25,13 +25,16 @@ exits, while `--json` prints one JSON snapshot and exits.
   free their ports). Preserve this property. Separate from all of that is one
   explicit, opt-in mode: the `cctop upgrade` subcommand (`src/upgrade.ts`)
   reaches the network and replaces cctop's own binary. It never runs from the
-  refresh loop — the monitor path never even imports it — so the
-  read-only/offline contract above holds for everything that isn't `cctop
-  upgrade`. The TUI's "restart to run the new version" notice does **not**
-  weaken this: it stats its own binary (`src/binary.ts`) to notice the file was
-  swapped underneath it, and never asks the network whether a release exists.
-  Keep it that way — polling GitHub from the refresh loop would break the
-  offline half of the contract.
+  refresh loop — the monitor path never even imports it — so everything that
+  isn't `cctop upgrade` stays read-only. It is also the only thing that touches
+  the network at all: the monitor makes no network calls, a property
+  `docs/usage-limits.md` already relies on ("cctop is read-only: it reads
+  `~/.claude` and the process table, and makes no network calls") and the reason
+  usage limits arrive through a status-line hook instead of an API call. The
+  TUI's "restart to run the new version" notice preserves that: it stats its own
+  binary (`src/binary.ts`) to see the file was swapped underneath it, rather
+  than asking GitHub whether a release exists. Polling from the refresh loop
+  would break it.
 - **Zero runtime dependencies.** cctop imports only Bun and OS built-ins
   (`bun:ffi`, `node:fs`, …); `package.json` has no `dependencies` field (the
   devDependencies are just Biome/tsc/types). Do not add npm packages — keep it
