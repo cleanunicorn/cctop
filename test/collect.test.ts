@@ -247,6 +247,41 @@ describe("bell time", () => {
       __test.bellTime(session({ statusUpdatedAt: started + 60_000 })),
     ).toBeNull();
   });
+
+  // bellFor is what collectRows actually calls: it reconciles the registry
+  // against the state the row *displays*, so a bell can never contradict the
+  // status dot next to it.
+  describe("reconciled against the displayed state", () => {
+    const rang = session({ status: "idle", statusUpdatedAt: started + 60_000 });
+
+    test("carries the ding through for a genuinely stopped session", () => {
+      expect(__test.bellFor(rang, "idle")).toBe(started + 60_000);
+    });
+
+    test("a session waiting on a delegated agent CLI never rings", () => {
+      // effectiveState() forces busy while copilot/gemini/... runs in the
+      // subprocess tree, even though the registry says idle — a green row must
+      // not wear a red bell
+      expect(__test.bellFor(rang, "busy")).toBeNull();
+    });
+
+    test("a headless session's inferred idle is not a ring", () => {
+      // `claude -p` / SDK sessions write no status; effectiveState() infers
+      // idle from the activity trail, but inferred silence never rang a bell
+      const headless = session({ statusUpdatedAt: started + 60_000 });
+      expect(__test.bellFor(headless, "idle")).toBeNull();
+    });
+
+    test("a process with no registry entry never rings", () => {
+      expect(__test.bellFor(null, "idle")).toBeNull();
+      expect(__test.bellFor(undefined, "?")).toBeNull();
+    });
+
+    test("the startup write stays suppressed through the wiring", () => {
+      const fresh = session({ status: "idle", statusUpdatedAt: started + 94 });
+      expect(__test.bellFor(fresh, "idle")).toBeNull();
+    });
+  });
 });
 
 // noteEntry folds one transcript entry into the running Details. The scan runs

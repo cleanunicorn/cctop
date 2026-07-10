@@ -29,7 +29,12 @@ import {
   subprocsOf,
   versionFromPath,
 } from "./collect/process-tree.ts";
-import { bellTime, readSessions, validSession } from "./collect/sessions.ts";
+import {
+  bellFor,
+  bellTime,
+  readSessions,
+  validSession,
+} from "./collect/sessions.ts";
 import { parseSettings } from "./collect/settings.ts";
 import {
   agentContext,
@@ -107,6 +112,7 @@ export const matchRow = (r: Instance, filter: string | null) =>
 export const __test = {
   validSession,
   bellTime,
+  bellFor,
   parseSettings,
   parseUsage,
   noteEntry,
@@ -236,10 +242,7 @@ export async function collectRows(filter: string | null): Promise<Instance[]> {
         contextTokens: details.ctx ?? null,
         lastActivity: lastMs ? new Date(lastMs).toISOString() : null,
         lastMs,
-        // a session held busy by a delegated agent CLI has not stopped and has
-        // rung nothing, whatever the registry says — the row reads busy, so it
-        // must not carry a bell either
-        bellAt: s && state !== "busy" ? bellTime(s) : null,
+        bellAt: bellFor(s, state),
         prompt: details.prompt ?? null,
         promptAt: details.promptAt ?? null,
         lastTurn: details.lastTurn ?? null,

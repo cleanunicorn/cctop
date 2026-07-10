@@ -45,6 +45,26 @@ export function bellTime(s: Session): number | null {
   return sinceStart > STARTUP_GRACE_MS ? s.statusUpdatedAt : null;
 }
 
+// The bell a row carries, reconciling the registry against the state the row
+// actually displays. Two cases where the registry alone would lie:
+//
+//   - A session waiting on a delegated agent CLI (copilot, gemini, …) reads
+//     "idle" in the registry, but effectiveState() shows it busy because it has
+//     not finished its job. A green row must not wear a red bell.
+//   - A headless session (`claude -p`, SDK) writes no status at all, so
+//     effectiveState() infers idle from its activity trail. bellTime() returns
+//     null for it — inferred silence is not a ring.
+//
+// Takes the *effective* state, not the registry status, so the bell and the
+// status dot can never contradict each other.
+export function bellFor(
+  s: Session | null | undefined,
+  state: string,
+): number | null {
+  if (!s || state === "busy") return null;
+  return bellTime(s);
+}
+
 // ~/.claude/sessions/<pid>.json is written by each running Claude Code:
 // { pid, sessionId, cwd, startedAt, version, kind, status, updatedAt,
 //   statusUpdatedAt, name }
