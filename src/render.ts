@@ -42,6 +42,18 @@ import {
 // refreshes, so the selection cursor stays put.
 export const rowKey = (r: Instance) => r.sessionId ?? `pid:${r.pid}`;
 
+// The row that dinged last — the newest bellAt, or null when nothing is
+// waiting. The single source of truth for "which session rang": the summary's
+// Bell: line names it and the `b` key jumps to it, so both must agree. Ties
+// keep the first in the given order (strict `>`), matching the busy-first,
+// lastMs-desc order rows already arrive in.
+export const newestBell = (rows: Instance[]): Instance | null =>
+  rows.reduce<Instance | null>(
+    (best, r) =>
+      r.bellAt != null && (best === null || r.bellAt > best.bellAt!) ? r : best,
+    null,
+  );
+
 // `min` reserves a stable width for the volatile numeric columns so a
 // changing value (cpu spiking to "100.0%", mem growing) does not resize the
 // column and shove every column to its right around between refreshes
@@ -325,11 +337,9 @@ export function buildFrame(
   // and a fixed-shape line keeps the summary from jittering. Last in the summary
   // (nearest the table) and dropped when nothing waits, so it never shifts the
   // lines above it.
-  const dinged = view
-    .filter((v) => v.raw.bellAt != null)
-    .sort((a, b) => b.raw.bellAt! - a.raw.bellAt!)[0];
+  const dinged = newestBell(rows);
   if (dinged) {
-    const { raw } = dinged;
+    const raw = dinged;
     const project = safe(shortProject(raw.project), "?");
     const ago = formatDuration((nowMs - raw.bellAt!) / 1000);
     summary.push(

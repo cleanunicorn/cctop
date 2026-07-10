@@ -17,6 +17,7 @@ import {
 import {
   BELL_MS,
   buildFrame,
+  newestBell,
   renderDetail,
   resolveDetail,
   rowKey,
@@ -650,5 +651,29 @@ describe("bell marker", () => {
     const row = idle({ bellAt: Date.now() - 4_000 });
     expect(renderDetail(row, 80)[0]).toContain(`${RED}${BELL}${RESET}`);
     expect(renderDetail(row, 80, true)[0]).not.toContain(BELL);
+  });
+});
+
+// newestBell is the shared selector: the Bell: summary line names its result and
+// the `b` key jumps to it, so pinning it here guarantees the two can't drift.
+describe("newestBell", () => {
+  const at = (id: string, bellAt: number | null) =>
+    baseRow({ sessionId: id, state: "idle", bellAt });
+
+  test("returns the row with the newest bellAt", () => {
+    const now = Date.now();
+    const rows = [at("a", now - 20_000), at("b", now - 2_000), at("c", null)];
+    expect(newestBell(rows)?.sessionId).toBe("b");
+  });
+
+  test("keeps the first row on a tie", () => {
+    const t = Date.now() - 5_000;
+    const rows = [at("first", t), at("second", t)];
+    expect(newestBell(rows)?.sessionId).toBe("first");
+  });
+
+  test("returns null when nothing is waiting", () => {
+    expect(newestBell([])).toBeNull();
+    expect(newestBell([at("a", null), at("b", null)])).toBeNull();
   });
 });

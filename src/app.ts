@@ -39,6 +39,7 @@ import { finishedSessions, notifySeq } from "./notify.ts";
 import {
   buildFrame,
   type Group,
+  newestBell,
   renderDetail,
   resolveDetail,
   rowKey,
@@ -420,16 +421,12 @@ export async function runApp(opts: AppOptions): Promise<void> {
       }
       case "b": {
         // Jump to the session named on the summary's Bell: line — the last one
-        // to ding. Picks the newest bellAt among the *displayed* rows, so the
-        // jump can only ever land on a row the user can see; when a filter hides
-        // it, say so rather than reporting that nothing rang.
+        // to ding. newestBell() is the same selector buildFrame uses for that
+        // line, over the *displayed* rows, so the jump always lands on the row
+        // the summary names and only ever on one the user can see.
         const rows = displayRows();
-        let best = -1;
-        rows.forEach((r, i) => {
-          if (r.bellAt != null && (best < 0 || r.bellAt > rows[best].bellAt!))
-            best = i;
-        });
-        if (best < 0) {
+        const target = newestBell(rows);
+        if (!target) {
           flash(
             state.rows.some((r) => r.bellAt != null)
               ? "the session that rang is hidden by the filter"
@@ -437,8 +434,8 @@ export async function runApp(opts: AppOptions): Promise<void> {
           );
           break;
         }
-        state.selectedIndex = best;
-        state.selectedKey = rowKey(rows[best]);
+        state.selectedIndex = rows.indexOf(target);
+        state.selectedKey = rowKey(target);
         break;
       }
       case "/":
