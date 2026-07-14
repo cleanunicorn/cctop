@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, expect, test } from "bun:test";
-import { parseCommand } from "../src/proc/cmdline.ts";
+import { parseCommand, parseProcArgs } from "../src/proc/cmdline.ts";
 
 // parseCommand turns a process's argv into the name and subcommand the
 // collectors identify it by. The subcommand is what tells a Claude Code session
@@ -84,5 +84,82 @@ describe("command line parsing (parseCommand)", () => {
         "/Applications/Visual Studio Code.app/Contents/MacOS/Electron",
       ]),
     ).toEqual({ name: "Electron", sub: null });
+  });
+});
+
+// The macOS half of the same job: sysctl fills a raw KERN_PROCARGS2 block and
+// parseProcArgs decodes it. It is every macOS row's only source of a subcommand,
+// so it is tested here against synthetic blocks — the FFI closure that fetches
+// the buffer cannot run off a Mac, but this decode can.
+describe("KERN_PROCARGS2 decoding (parseProcArgs)", () => {
+  // one raw block: argc (i32 LE), the exec path, NUL padding, then the fields —
+  // argv first and the environment straight after it, exactly as the kernel
+  // lays it out.
+  const block = (argc: number, execPath: string, fields: string[]) => {
+    const body = `${execPath}\0\0\0${fields.join("\0")}\0`;
+    const buf = new Uint8Array(4 + body.length);
+    new DataView(buf.buffer).setInt32(0, argc, true);
+    for (let i = 0; i < body.length; i++) buf[4 + i] = body.charCodeAt(i);
+    return buf;
+  };
+
+  // The reason argc is read at all. argv and the environment sit in one block
+  // with nothing between them, so a decode that splits to the end of the block
+  // would hand back the process's first environment variable as argv[1] — and
+  // env vars hold API keys. `claude` with argc 1 must decode to exactly argv.
+  test("stops at argc, so the environment cannot leak in as argv[1]", () => {
+    const buf = block(1, "/u/claude/versions/2.1.206", [
+      "claude",
+      "ANTHROPIC_API_KEY=sk-secret",
+      "SHELL=/bin/zsh",
+    ]);
+    expect(parseProcArgs(buf, buf.length)).toEqual(["claude"]);
+  });
+
+  test("decodes a helper's argv up to argc", () => {
+    const buf = block(
+      3,
+      "/home/u/.local/bin/claude",
+      ["/home/u/.local/bin/claude", "daemon", "run", "PATH=/usr/bin"], // last is env
+    );
+    expect(parseProcArgs(buf, buf.length)).toEqual([
+      "/home/u/.local/bin/claude",
+      "daemon",
+      "run",
+    ]);
+    // and the whole point: it reads as the daemon, not as a session
+    expect(parseCommand(parseProcArgs(buf, buf.length))).toEqual({
+      name: "claude",
+      sub: "daemon",
+    });
+  });
+
+  // a truncated block only ever costs trailing argv entries; argv[0] and argv[1]
+  // — the two fields anything here depends on — sit within the first bytes
+  test("survives a block truncated short of argc entries", () => {
+    const buf = block(5, "/bin/claude", ["claude bg-spare", "--bg-spare"]);
+    expect(parseProcArgs(buf, buf.length)).toEqual([
+      "claude bg-spare",
+      "--bg-spare",
+    ]);
+  });
+
+  test("returns nothing for a malformed or empty block", () => {
+    expect(parseProcArgs(new Uint8Array(0), 0)).toEqual([]); // no argc word
+    expect(parseProcArgs(new Uint8Array(2), 2)).toEqual([]); // short of an i32
+    expect(parseProcArgs(block(0, "/bin/claude", ["claude"]), 32)).toEqual([]); // argc 0
+    const noNul = new Uint8Array(8); // an argc word and no NUL anywhere after it
+    new DataView(noNul.buffer).setInt32(0, 1, true);
+    noNul.set([0x61, 0x62, 0x63, 0x64], 4);
+    expect(parseProcArgs(noNul, noNul.length)).toEqual([]);
+  });
+
+  // the buffer the source reuses across pids is sized from KERN_ARGMAX, so a
+  // decode must honour the length sysctl reported, not the buffer's capacity
+  test("honours the reported length, not the buffer's capacity", () => {
+    const buf = block(2, "/bin/claude", ["claude", "daemon"]);
+    const padded = new Uint8Array(buf.length + 64); // reused, oversized buffer
+    padded.set(buf);
+    expect(parseProcArgs(padded, buf.length)).toEqual(["claude", "daemon"]);
   });
 });
