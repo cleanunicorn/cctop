@@ -1032,13 +1032,11 @@ describe("cpu sampling", () => {
   });
 });
 
-// Identifying a Claude Code process and reading its version out of the
-// version-named executable path (.../claude/versions/2.1.176).
 // The fallback for a process with no registry entry of its own: the newest
-// transcript in its project dir. A transcript that a registry-backed session
-// owns is off limits — otherwise a claude-named process without an entry adopts
-// a live session's transcript and renders as that session's duplicate, down to
-// the branch, context, model and prompt.
+// transcript in its project dir, and only one written since it started. Both
+// bounds keep a claude-named process without an entry from adopting a
+// transcript that is not its own and rendering as a duplicate of the session
+// that owns it — a live session's (claimed), or a previous one's (too old).
 describe("transcript fallback (latestTranscript)", () => {
   let root: string;
   beforeAll(() => {
@@ -1066,11 +1064,36 @@ describe("transcript fallback (latestTranscript)", () => {
 
   test("takes the newest transcript written since the process started", () => {
     const { dir, paths } = project("newest", {
-      "stale.jsonl": -3600, // predates the process: a previous session's
       "old.jsonl": 10,
       "new.jsonl": 20,
     });
     expect(__test.latestTranscript(dir, startSec)).toBe(paths["new.jsonl"]!);
+  });
+
+  // The start-time bound, pinned on its own — with a stale transcript as the
+  // only candidate, the fallback must come back empty rather than adopt it.
+  // Asserting it alongside a newer transcript would prove nothing: the newer one
+  // wins on mtime whether or not the bound exists.
+  test("ignores a transcript that predates the process", () => {
+    const { dir } = project("stale-only", {
+      "previous-session.jsonl": -3600,
+    });
+    expect(__test.latestTranscript(dir, startSec)).toBeNull();
+  });
+
+  // the 60s of slack: a transcript written just before the process start is
+  // still its own (the session writes its first turn as it comes up)
+  test("allows the slack around the process start", () => {
+    const { dir, paths } = project("slack", { "mine.jsonl": -30 });
+    expect(__test.latestTranscript(dir, startSec)).toBe(paths["mine.jsonl"]!);
+  });
+
+  // a project with no transcripts at all: readdirSync throws, and the fallback
+  // has to absorb it rather than take collectRows down with it
+  test("returns null when the project has no transcript directory", () => {
+    expect(
+      __test.latestTranscript(join(root, "no-such-project"), startSec),
+    ).toBeNull();
   });
 
   test("skips a transcript a registry-backed session already owns", () => {
