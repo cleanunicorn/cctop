@@ -7,8 +7,38 @@
 // unit tested directly.
 
 export interface Command {
-  name: string | null; // argv[0]'s basename; null when argv is empty
+  // the leading token of a rewritten process title, else argv[0]'s basename;
+  // null when argv is empty
+  name: string | null;
   sub: string | null; // its subcommand, when it has one
+}
+
+// macOS hands back one raw block per process (KERN_PROCARGS2): argc as a
+// little-endian i32, the executable's path, a run of NUL padding, then argv —
+// and immediately after argv, the environment.
+//
+// argc is what bounds argv, and it has to: without it, argv[1] of a bare
+// `claude` would read as that process's first environment variable, which is
+// both wrong and a way to pull another process's secrets into a row. `len` is
+// what sysctl reported it actually wrote, so a truncated block only ever costs
+// trailing argv entries.
+//
+// Pure, and separate from the FFI closure that fills the buffer, so the decode
+// every macOS row depends on is unit tested rather than taken on trust.
+export function parseProcArgs(buf: Uint8Array, len: number): string[] {
+  if (len < 4) return [];
+  const argc = new DataView(buf.buffer, buf.byteOffset, 4).getInt32(0, true);
+  if (argc <= 0) return [];
+  // latin1: each byte maps 1:1 to a char, which is all we need to find the
+  // NUL-separated fields (Buffer avoids TextDecoder's stricter typing)
+  const raw = Buffer.from(buf.slice(4, len)).toString("latin1");
+  const start = raw.indexOf("\0"); // end of the exec path
+  if (start < 0) return [];
+  const fields = raw.slice(start).replace(/^\0+/, "").split("\0");
+  // every field is NUL-terminated, so the split leaves a trailing empty one;
+  // it would show up as a phantom argv entry when the block ends before argc
+  if (fields.at(-1) === "") fields.pop();
+  return fields.slice(0, argc);
 }
 
 // argv[0] is normally the executable's path, but a process may rewrite its
