@@ -1275,6 +1275,19 @@ describe("claude process identification", () => {
     expect(__test.isClaudeProc(proc("claude", null, "fix"))).toBe(true);
   });
 
+  // the orphan-port scan excludes the helpers by this predicate rather than by
+  // their absence from the row set, so it is pinned on its own
+  test("identifies a helper without reference to the row set", () => {
+    expect(__test.isClaudeHelper(proc("claude", null, "bg-pty-host"))).toBe(
+      true,
+    );
+    expect(__test.isClaudeHelper(proc("claude", null, "daemon"))).toBe(true);
+    expect(__test.isClaudeHelper(proc("claude", null, null))).toBe(false);
+    expect(__test.isClaudeHelper(proc("node", "/usr/bin/node", null))).toBe(
+      false,
+    );
+  });
+
   test("reads the version from the executable's last path segment", () => {
     expect(__test.versionFromPath("/u/claude/versions/2.1.176")).toBe(
       "2.1.176",

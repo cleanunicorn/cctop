@@ -23,7 +23,7 @@ import type { Proc } from "../proc.ts";
 // of names, so a helper added later is excluded by default; a session is either
 // bare `claude` or takes flags (`claude -p …`), never one of these.
 const CLAUDE_COMMANDS = new Set(["daemon", "mcp"]);
-const isClaudeHelper = (p: Proc) =>
+export const isClaudeHelper = (p: Proc) =>
   !!p.sub && (p.sub.startsWith("bg-") || CLAUDE_COMMANDS.has(p.sub));
 
 // The version-named executable lives under .../claude/versions/2.1.176

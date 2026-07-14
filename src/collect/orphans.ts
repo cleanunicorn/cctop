@@ -9,6 +9,7 @@
 // daemons. Read-only; spawns nothing.
 
 import { cwdOf, listeningPorts, type Proc } from "../proc.ts";
+import { isClaudeHelper } from "./process-tree.ts";
 import type { Instance } from "./types.ts";
 
 // The tracked project dir that contains `cwd` — an exact match or an ancestor
@@ -39,10 +40,18 @@ export function attachOrphanPorts(
   // of the host's daemons, and they belong to other users, so dropping them on
   // a field compare avoids a cwdOf syscall per daemon on every refresh. A dev
   // server we left behind shares our uid and survives to the cwd check.
+  //
+  // Claude Code's own helpers are excluded explicitly. They are init-reparented,
+  // ours, and run in the session's project dir, so they clear every other gate;
+  // candidatePids used to cover them, back when they were rows. They hold no
+  // listening TCP socket today, but a leftover dev server is offered up for
+  // SIGTERM (`f`), and offering to kill Claude Code's pty host is not a mistake
+  // worth leaving one syscall away.
   const ownUid = process.getuid?.() ?? -1;
   const matched: { pid: number; name: string; project: string }[] = [];
   for (const p of procs) {
     if (p.ppid !== 1 || p.uid !== ownUid || candidatePids.has(p.pid)) continue;
+    if (isClaudeHelper(p)) continue;
     const cwd = cwdOf(p.pid);
     const project = cwd ? projectForCwd(cwd, dirs) : null;
     if (project) matched.push({ pid: p.pid, name: p.name, project });
