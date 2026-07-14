@@ -326,14 +326,13 @@ export function createDarwinSource(): ProcSource {
       const path = readCstr(
         libproc.symbols.proc_pidpath(pid, ptr(cstr), cstr.byteLength),
       );
-      const cmd = parseCommand(procArgv(pid));
+      const { name: argvName, sub } = parseCommand(procArgv(pid));
       const name =
-        cmd.name ??
+        argvName ??
         readCstr(libproc.symbols.proc_name(pid, ptr(cstr), cstr.byteLength)) ??
         comm ??
         path?.split("/").pop() ??
         "?";
-      const sub = cmd.sub;
       procs.push({ pid, ppid, rss, cpuSec, startSec, path, name, sub, uid });
     }
     return procs;

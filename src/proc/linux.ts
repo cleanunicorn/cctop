@@ -45,9 +45,9 @@ export function createLinuxSource(): ProcSource {
         // /proc/pid/cmdline is the NUL-separated argv, and only argv (the
         // environment lives in a separate file), so every field is safe to read
         const argv = readFileSync(`/proc/${pid}/cmdline`, "latin1").split("\0");
-        const cmd = parseCommand(argv);
-        const name = cmd.name || status.match(/^Name:\s+(.+)$/m)?.[1] || "?";
-        const sub = cmd.sub;
+        const { name: argvName, sub } = parseCommand(argv);
+        // a kernel thread has an empty cmdline; its name lives in status
+        const name = argvName || status.match(/^Name:\s+(.+)$/m)?.[1] || "?";
         procs.push({
           pid,
           ppid,

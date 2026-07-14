@@ -8,11 +8,16 @@
 // This module is the orchestrator. Each data source lives in its own collector
 // under ./collect/ (sessions, usage, transcript, subagents, process-tree,
 // orphans); the per-source caches and their prune() functions are co-located
-// there. The two
-// invariants that must stay here are candidate selection and the order of the
-// two passes: transcripts are read concurrently (Promise.all), then sub-agents
-// are attached sequentially so sessions sharing a transcript can't both claim
-// the same agents (see attachSubagentsInOrder).
+// there. The invariants that must stay here are candidate selection and the
+// order of the three passes:
+//
+//   1. the registry is resolved first, so which transcripts real sessions own is
+//      known before any process without an entry goes looking for one to fall
+//      back to — resolve it later and a helper adopts a live session's
+//      transcript and renders as its duplicate (see latestTranscript's `claimed`)
+//   2. transcripts are then read concurrently (Promise.all)
+//   3. sub-agents are attached sequentially, so sessions sharing a transcript
+//      can't both claim the same agents (see attachSubagentsInOrder)
 
 import { statSync } from "node:fs";
 import { describeAssistant } from "./collect/entry.ts";
@@ -103,6 +108,16 @@ const effectiveState = (
 const transcriptOf = (s: Session) =>
   `${projectDir(s.cwd)}/${s.sessionId}.jsonl`;
 
+// Does this registry entry really belong to this process? A start time that
+// doesn't match the entry's means the PID was reused, or the entry is malformed
+// — either way the row would wear another session's identity. The tolerance
+// absorbs the lag between a session starting and writing itself down.
+const CLOCK_SKEW_MS = 60_000;
+const sessionOwns = (s: Session, startSec: number, nowMs: number) =>
+  !!startSec &&
+  Math.abs(startSec * 1000 - s.startedAt) <= CLOCK_SKEW_MS &&
+  s.startedAt <= nowMs + CLOCK_SKEW_MS;
+
 // Does a row match the filter? Searches project, host, branch, model, and
 // session id/name. Shared by the snapshot path and the live TUI filter.
 export const matchRow = (r: Instance, filter: string | null) =>
@@ -132,6 +147,7 @@ export const __test = {
   hostApp,
   cpuPercent,
   effectiveState,
+  sessionOwns,
   isAgentCmd,
   isClaudeHelper,
   isClaudeProc,
@@ -155,25 +171,18 @@ export async function collectRows(filter: string | null): Promise<Instance[]> {
   // (not just the heuristic-detected ones) and never double-list a session
   const candidatePids = new Set(candidates.map((p) => p.pid));
 
-  // Resolve each candidate's registry entry up front, before any transcript is
-  // read: which transcripts real sessions own has to be known before a process
-  // without an entry goes looking for one to fall back to.
+  // Pass 1: resolve each candidate's registry entry, and with it the set of
+  // transcripts that are spoken for — both before any transcript is read, so no
+  // registry-less process can adopt one and render as a duplicate of the session
+  // that owns it.
   const sessionFor = new Map<number, Session | null>();
+  const claimed = new Set<string>();
   for (const p of candidates) {
     const s = sessions.get(p.pid) ?? null;
-    // A registry entry whose timestamp does not match the process start means
-    // the PID was reused or the entry is malformed.
-    const mismatched =
-      !!s &&
-      (!p.startSec ||
-        Math.abs(p.startSec * 1000 - s.startedAt) > 60_000 ||
-        s.startedAt > nowMs + 60_000);
-    sessionFor.set(p.pid, mismatched ? null : s);
+    const owned = s && sessionOwns(s, p.startSec, nowMs) ? s : null;
+    sessionFor.set(p.pid, owned);
+    if (owned) claimed.add(transcriptOf(owned));
   }
-  // the transcripts spoken for, so no registry-less process can adopt one and
-  // render as a duplicate of the session that owns it
-  const claimed = new Set<string>();
-  for (const s of sessionFor.values()) if (s) claimed.add(transcriptOf(s));
 
   const childrenOf = indexChildren(procs);
 

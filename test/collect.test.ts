@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Session } from "../src/collect/sessions.ts";
 import {
   __test,
   captureUsage,
@@ -1135,6 +1136,35 @@ describe("cpu sampling", () => {
     // the PID is reused: cpuSec resets lower, so the delta is negative
     const cpu = __test.cpuPercent(proc(pid, 1, t0 / 1000 - 1), t0 + 2000);
     expect(cpu).toBe(0);
+  });
+});
+
+// A registry entry is keyed by pid, and pids get reused — so an entry only
+// belongs to a process whose start time it matches. Without this the row would
+// wear a dead session's identity.
+describe("registry ownership (sessionOwns)", () => {
+  const startedAt = 1_700_000_000_000; // the entry's own timestamp, ms
+  const startSec = startedAt / 1000; // a process that started with it
+  const nowMs = startedAt + 60 * 60 * 1000;
+  const entry = { startedAt } as Session;
+
+  test("accepts an entry whose timestamp matches the process start", () => {
+    expect(__test.sessionOwns(entry, startSec, nowMs)).toBe(true);
+    expect(__test.sessionOwns(entry, startSec + 30, nowMs)).toBe(true); // slack
+  });
+
+  test("rejects an entry left behind by a reused pid", () => {
+    // the process started an hour after the entry was written: a different one
+    expect(__test.sessionOwns(entry, startSec + 3600, nowMs)).toBe(false);
+    expect(__test.sessionOwns(entry, startSec - 3600, nowMs)).toBe(false);
+  });
+
+  test("rejects an entry stamped in the future, and an unreadable start", () => {
+    const skewed = { startedAt: nowMs + 3_600_000 } as Session;
+    expect(__test.sessionOwns(skewed, skewed.startedAt / 1000, nowMs)).toBe(
+      false,
+    );
+    expect(__test.sessionOwns(entry, 0, nowMs)).toBe(false); // startSec unknown
   });
 });
 
