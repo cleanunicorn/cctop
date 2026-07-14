@@ -14,6 +14,11 @@ export interface Proc {
   startSec: number; // process start, unix seconds
   path: string | null; // executable path
   name: string; // argv[0] basename or best-effort
+  // argv[1], when it is a bare subcommand rather than a flag or absent. It is
+  // what separates a Claude Code session (`claude`, `claude -p …`) from one of
+  // the helper processes that share its name and executable (`claude
+  // bg-pty-host`, `claude daemon run`) — see isClaudeProc.
+  sub: string | null;
   uid: number; // owning user id; -1 when unreadable (a proc we don't own)
 }
 

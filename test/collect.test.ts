@@ -837,6 +837,7 @@ describe("sub-process resolution", () => {
     startSec: 0,
     path: null,
     name: "node",
+    sub: null,
     uid: 0,
     ...over,
   });
@@ -1033,8 +1034,73 @@ describe("cpu sampling", () => {
 
 // Identifying a Claude Code process and reading its version out of the
 // version-named executable path (.../claude/versions/2.1.176).
+// The fallback for a process with no registry entry of its own: the newest
+// transcript in its project dir. A transcript that a registry-backed session
+// owns is off limits — otherwise a claude-named process without an entry adopts
+// a live session's transcript and renders as that session's duplicate, down to
+// the branch, context, model and prompt.
+describe("transcript fallback (latestTranscript)", () => {
+  let root: string;
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), "cctop-fallback-"));
+  });
+  afterAll(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const startSec = 1_700_000_000;
+  // a project dir of transcripts, each stamped a number of seconds after (or,
+  // when negative, before) the process started
+  const project = (name: string, files: Record<string, number>) => {
+    const dir = join(root, name);
+    mkdirSync(dir, { recursive: true });
+    const paths: Record<string, string> = {};
+    for (const [f, ageSec] of Object.entries(files)) {
+      const path = join(dir, f);
+      writeFileSync(path, "");
+      utimesSync(path, startSec + ageSec, startSec + ageSec);
+      paths[f] = path;
+    }
+    return { dir, paths };
+  };
+
+  test("takes the newest transcript written since the process started", () => {
+    const { dir, paths } = project("newest", {
+      "stale.jsonl": -3600, // predates the process: a previous session's
+      "old.jsonl": 10,
+      "new.jsonl": 20,
+    });
+    expect(__test.latestTranscript(dir, startSec)).toBe(paths["new.jsonl"]!);
+  });
+
+  test("skips a transcript a registry-backed session already owns", () => {
+    const { dir, paths } = project("claimed", {
+      "mine.jsonl": 10,
+      "live-session.jsonl": 20, // newest, but spoken for
+    });
+    const claimed = new Set([paths["live-session.jsonl"]!]);
+    expect(__test.latestTranscript(dir, startSec, claimed)).toBe(
+      paths["mine.jsonl"]!,
+    );
+  });
+
+  // the shape of the bug: a helper process in a live session's project dir. With
+  // every transcript there claimed, it gets none — an empty row, not a clone.
+  test("returns null when every candidate transcript is claimed", () => {
+    const { dir, paths } = project("all-claimed", {
+      "live-session.jsonl": 20,
+    });
+    const claimed = new Set([paths["live-session.jsonl"]!]);
+    expect(__test.latestTranscript(dir, startSec, claimed)).toBeNull();
+  });
+});
+
 describe("claude process identification", () => {
-  const proc = (name: string, path: string | null): Proc => ({
+  const proc = (
+    name: string,
+    path: string | null,
+    sub: string | null = null,
+  ): Proc => ({
     pid: 1,
     ppid: 1,
     rss: 0,
@@ -1042,6 +1108,7 @@ describe("claude process identification", () => {
     startSec: 0,
     path,
     name,
+    sub,
   });
 
   test("matches by name or a versioned executable path", () => {
@@ -1051,6 +1118,34 @@ describe("claude process identification", () => {
     ).toBe(true);
     expect(__test.isClaudeProc(proc("node", "/usr/bin/node"))).toBe(false);
     expect(__test.isClaudeProc(proc("bash", null))).toBe(false);
+  });
+
+  // Claude Code spawns helpers that are named "claude" and exec the same
+  // versioned binary a session does, so name and path alone let them through.
+  // A helper row is worse than a spare row: it writes no registry entry, so it
+  // falls back to the newest transcript in its cwd — and a bg-pty-host sits in
+  // the session's project dir, so it adopts that session's transcript and
+  // renders as its exact duplicate.
+  test("rejects the helper processes that share the claude name", () => {
+    expect(
+      __test.isClaudeProc(
+        proc("claude", "/u/claude/versions/2.1.206", "bg-pty-host"),
+      ),
+    ).toBe(false);
+    expect(__test.isClaudeProc(proc("claude", null, "bg-spare"))).toBe(false);
+    expect(__test.isClaudeProc(proc("claude", null, "daemon"))).toBe(false);
+    expect(__test.isClaudeProc(proc("claude", null, "mcp"))).toBe(false);
+    // the bg- prefix, not a fixed list, so a helper added later is excluded too
+    expect(__test.isClaudeProc(proc("claude", null, "bg-something"))).toBe(
+      false,
+    );
+  });
+
+  // only a helper carries a subcommand: a session is bare, takes flags (which
+  // never become `sub`), or is handed a prompt as its first argument
+  test("keeps a session that carries flags or a prompt", () => {
+    expect(__test.isClaudeProc(proc("claude", null, null))).toBe(true);
+    expect(__test.isClaudeProc(proc("claude", null, "fix"))).toBe(true);
   });
 
   test("reads the version from the executable's last path segment", () => {

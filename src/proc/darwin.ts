@@ -8,6 +8,7 @@
 // query) lives inside createDarwinSource(); the facade calls it only on darwin.
 
 import { CString, dlopen, FFIType, ptr, read } from "bun:ffi";
+import { parseCommand } from "./cmdline.ts";
 import type { IfCounters, Proc, ProcSource } from "./types.ts";
 
 export function createDarwinSource(): ProcSource {
@@ -80,10 +81,13 @@ export function createDarwinSource(): ProcSource {
   const machToSec = machTimebase[0] / machTimebase[1] / 1e9;
 
   // argv[0] is how the process was invoked; the claude CLI shows up as
-  // "claude" here while its executable is named after its version.
-  // Layout of KERN_PROCARGS2: argc (i32), exec path, NUL padding, argv.
+  // "claude" here while its executable is named after its version. argv[1] is
+  // read too: it is what tells a session apart from one of the helpers that
+  // share its name (`claude bg-pty-host`) — see isClaudeProc.
+  // Layout of KERN_PROCARGS2: argc (i32), exec path, NUL padding, argv, env.
   const argsBuf = new Uint8Array(8192);
-  const procArgv0 = (pid: number): string | null => {
+  const argsView = new DataView(argsBuf.buffer);
+  const procArgv = (pid: number): string[] => {
     const mib = new Int32Array([CTL_KERN, KERN_PROCARGS2, pid]);
     const size = new BigUint64Array([BigInt(argsBuf.byteLength)]);
     const r = libc.symbols.sysctl(
@@ -94,18 +98,20 @@ export function createDarwinSource(): ProcSource {
       null,
       0n,
     );
-    if (r !== 0) return null;
+    if (r !== 0) return [];
+    const argc = argsView.getInt32(0, true);
+    if (argc <= 0) return [];
     // latin1: each byte maps 1:1 to a char, which is all we need to find the
     // NUL-separated argv fields (Buffer avoids TextDecoder's stricter typing)
     const raw = Buffer.from(argsBuf.slice(4, Number(size[0]))).toString(
       "latin1",
     );
-    const start = raw.indexOf("\0");
-    if (start < 0) return null;
-    const argv0 = raw.slice(start).replace(/^\0+/, "");
-    const end = argv0.indexOf("\0");
-    if (end < 0) return null;
-    return argv0.slice(0, end) || null;
+    const start = raw.indexOf("\0"); // end of the exec path
+    if (start < 0) return [];
+    // the environment follows argv in the same buffer, so argc — not the end of
+    // the block — is what bounds argv; without it argv[1] of a bare `claude`
+    // would read as the first environment variable.
+    return raw.slice(start).replace(/^\0+/, "").split("\0").slice(0, argc);
   };
 
   // proc_vnodepathinfo: pvi_cdir.vip_path sits after the 152-byte
@@ -318,13 +324,15 @@ export function createDarwinSource(): ProcSource {
       const path = readCstr(
         libproc.symbols.proc_pidpath(pid, ptr(cstr), cstr.byteLength),
       );
+      const cmd = parseCommand(procArgv(pid));
       const name =
-        procArgv0(pid)?.split("/").pop() ??
+        cmd.name ??
         readCstr(libproc.symbols.proc_name(pid, ptr(cstr), cstr.byteLength)) ??
         comm ??
         path?.split("/").pop() ??
         "?";
-      procs.push({ pid, ppid, rss, cpuSec, startSec, path, name, uid });
+      const sub = cmd.sub;
+      procs.push({ pid, ppid, rss, cpuSec, startSec, path, name, sub, uid });
     }
     return procs;
   };
