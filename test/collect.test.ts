@@ -1220,6 +1220,16 @@ describe("registry ownership (sessionOwns)", () => {
     );
   });
 
+  // A clock that runs ahead writes an entry stamped in the future. Its own slack
+  // is a separate bound from the one above, so it gets its own boundary: an hour
+  // into the future proves nothing about where the line actually falls.
+  test("holds the future-skew bound to the same slack", () => {
+    const at = { startedAt: nowMs + 60_000 } as Session;
+    expect(__test.sessionOwns(at, at.startedAt / 1000, nowMs)).toBe(true);
+    const past = { startedAt: nowMs + 60_001 } as Session;
+    expect(__test.sessionOwns(past, past.startedAt / 1000, nowMs)).toBe(false);
+  });
+
   // A process whose start time we could not read cannot be matched to an entry
   // at all. The entry here is one whose timestamp a startSec of 0 would OTHERWISE
   // sit within — so only the unreadable-start guard can reject it, and the test
