@@ -87,9 +87,10 @@ describe("command line parsing (parseCommand)", () => {
   });
 
   // Claude's helpers are not the only processes that rewrite their title, and
-  // the name this yields is what the HOST column and the sub-process rows show —
-  // so the common ones are pinned. The trailing colon is punctuation: without
-  // stripping it, hostApp would be matching "sshd:" and rows would read "nginx:".
+  // the name this yields is what the HOST column and the sub-process rows
+  // display — so the common ones are pinned. The trailing colon is punctuation,
+  // not part of the name: left on, rows would read "nginx:" and HOST would print
+  // the raw title token for any host outside the tmux/sshd/app-bundle set.
   test("names a process that rewrote its title, colon and all", () => {
     expect(parseCommand(["tmux: server"])).toEqual({
       name: "tmux",
@@ -177,12 +178,22 @@ describe("KERN_PROCARGS2 decoding (parseProcArgs)", () => {
     expect(parseProcArgs(noNul, noNul.length)).toEqual([]);
   });
 
-  // the buffer the source reuses across pids is sized from KERN_ARGMAX, so a
-  // decode must honour the length sysctl reported, not the buffer's capacity
-  test("honours the reported length, not the buffer's capacity", () => {
-    const buf = block(2, "/bin/claude", ["claude", "daemon"]);
-    const padded = new Uint8Array(buf.length + 64); // reused, oversized buffer
-    padded.set(buf);
-    expect(parseProcArgs(padded, buf.length)).toEqual(["claude", "daemon"]);
+  // The source reuses one buffer across every pid, so what a shorter block does
+  // not overwrite is the PREVIOUS process's block — including its environment.
+  // Only the length sysctl reported bounds the fresh block; the buffer's own
+  // capacity would read the last process's leftovers back out as this one's argv.
+  test("honours the reported length over the reused buffer's leftovers", () => {
+    const stale = block(4, "/a/long/previous/executable/path", [
+      "previous",
+      "ANTHROPIC_API_KEY=sk-leak",
+      "and",
+      "more",
+    ]);
+    const fresh = block(4, "/bin/claude", ["claude", "daemon"]); // argc > fields
+    const reused = new Uint8Array(stale.length);
+    reused.set(stale);
+    reused.set(fresh); // the fresh block only covers part of it
+
+    expect(parseProcArgs(reused, fresh.length)).toEqual(["claude", "daemon"]);
   });
 });

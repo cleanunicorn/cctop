@@ -22,14 +22,24 @@ import type { Proc } from "../proc.ts";
 // The subcommand is what tells them apart. `bg-` as a prefix rather than a list
 // of names, so a helper added later is excluded by default; a session is either
 // bare `claude` or takes flags (`claude -p …`), never one of these.
+//
+// Both halves matter. The subcommand alone is not Claude's — plenty of CLIs take
+// a `daemon` or an `mcp` subcommand — so a helper is a claude *executable*
+// running one. Callers outside candidate selection depend on that: the
+// orphan-port scan runs this over the whole process table, and without the
+// executable half it would mistake someone else's `mcp` server for one of ours.
 const CLAUDE_COMMANDS = new Set(["daemon", "mcp"]);
-export const isClaudeHelper = (p: Proc) =>
-  !!p.sub && (p.sub.startsWith("bg-") || CLAUDE_COMMANDS.has(p.sub));
 
 // The version-named executable lives under .../claude/versions/2.1.176
-export const isClaudeProc = (p: Proc) =>
-  (p.name === "claude" || /\/claude\/versions\/\d/.test(p.path ?? "")) &&
-  !isClaudeHelper(p);
+const isClaudeExe = (p: Proc) =>
+  p.name === "claude" || /\/claude\/versions\/\d/.test(p.path ?? "");
+
+export const isClaudeHelper = (p: Proc) =>
+  isClaudeExe(p) &&
+  !!p.sub &&
+  (p.sub.startsWith("bg-") || CLAUDE_COMMANDS.has(p.sub));
+
+export const isClaudeProc = (p: Proc) => isClaudeExe(p) && !isClaudeHelper(p);
 
 export const versionFromPath = (path: string | null) =>
   path

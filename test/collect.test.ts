@@ -11,6 +11,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { isOrphanCandidate } from "../src/collect/orphans.ts";
+import { isClaudeHelper } from "../src/collect/process-tree.ts";
 import type { Session } from "../src/collect/sessions.ts";
 import {
   __test,
@@ -1099,6 +1101,49 @@ describe("projectForCwd", () => {
   });
 });
 
+// Which processes the orphan scan will even look at. The gate that costs a
+// cwdOf syscall per process, so it is the one worth getting right — and it is
+// where a leftover dev server is told apart from Claude Code's own helpers,
+// which look exactly like one (init-reparented, ours, in the project's dir).
+describe("orphan candidacy (isOrphanCandidate)", () => {
+  const ownUid = 501;
+  const rows = new Set([100]); // a session already holding a row
+  const p = (over: Partial<Proc>): Proc => ({
+    pid: 1,
+    ppid: 1,
+    rss: 0,
+    cpuSec: 0,
+    startSec: 0,
+    path: null,
+    name: "node",
+    sub: null,
+    uid: ownUid,
+    ...over,
+  });
+
+  test("takes an init-reparented process we own", () => {
+    expect(isOrphanCandidate(p({ pid: 9 }), ownUid, rows)).toBe(true);
+  });
+
+  test("leaves alone what is not ours, not orphaned, or already a row", () => {
+    expect(isOrphanCandidate(p({ pid: 9, ppid: 42 }), ownUid, rows)).toBe(
+      false,
+    );
+    expect(isOrphanCandidate(p({ pid: 9, uid: 0 }), ownUid, rows)).toBe(false);
+    expect(isOrphanCandidate(p({ pid: 100 }), ownUid, rows)).toBe(false);
+  });
+
+  // the whole reason this predicate exists: an orphan is offered up for SIGTERM
+  // (`f`), and Claude Code's pty host clears every other gate
+  test("never offers up one of Claude Code's own helpers", () => {
+    const host = p({ pid: 9, name: "claude", sub: "bg-pty-host" });
+    expect(isOrphanCandidate(host, ownUid, rows)).toBe(false);
+    // but a real dev server that merely takes a `daemon` subcommand still counts
+    const server = p({ pid: 9, name: "colima", sub: "daemon" });
+    expect(isOrphanCandidate(server, ownUid, rows)).toBe(true);
+  });
+});
+
 // cpuPercent is top-style: the delta between two samples once it has a prior,
 // or the lifetime average on the first sample. PID reuse can make the counter
 // go backwards, which must clamp to 0 rather than report a negative spike.
@@ -1159,12 +1204,29 @@ describe("registry ownership (sessionOwns)", () => {
     expect(__test.sessionOwns(entry, startSec - 3600, nowMs)).toBe(false);
   });
 
-  test("rejects an entry stamped in the future, and an unreadable start", () => {
+  // the tolerance is a boundary, so it is asserted at the boundary — either side
+  // of 60s, in both directions
+  test("holds the tolerance to exactly the slack it allows", () => {
+    expect(__test.sessionOwns(entry, startSec + 60, nowMs)).toBe(true);
+    expect(__test.sessionOwns(entry, startSec + 61, nowMs)).toBe(false);
+    expect(__test.sessionOwns(entry, startSec - 60, nowMs)).toBe(true);
+    expect(__test.sessionOwns(entry, startSec - 61, nowMs)).toBe(false);
+  });
+
+  test("rejects an entry stamped in the future", () => {
     const skewed = { startedAt: nowMs + 3_600_000 } as Session;
     expect(__test.sessionOwns(skewed, skewed.startedAt / 1000, nowMs)).toBe(
       false,
     );
-    expect(__test.sessionOwns(entry, 0, nowMs)).toBe(false); // startSec unknown
+  });
+
+  // A process whose start time we could not read cannot be matched to an entry
+  // at all. The entry here is one whose timestamp a startSec of 0 would OTHERWISE
+  // sit within — so only the unreadable-start guard can reject it, and the test
+  // fails if that guard goes.
+  test("rejects a process whose start time is unreadable", () => {
+    const justBooted = { startedAt: 30_000 } as Session;
+    expect(__test.sessionOwns(justBooted, 0, 60_000)).toBe(false);
   });
 });
 
@@ -1307,15 +1369,23 @@ describe("claude process identification", () => {
     expect(__test.isClaudeProc(proc("claude", null, "fix"))).toBe(true);
   });
 
-  // the orphan-port scan excludes the helpers by this predicate rather than by
-  // their absence from the row set, so it is pinned on its own
-  test("identifies a helper without reference to the row set", () => {
-    expect(__test.isClaudeHelper(proc("claude", null, "bg-pty-host"))).toBe(
-      true,
+  // A helper is a claude executable running one of these subcommands — not any
+  // process that happens to take one. Plenty of CLIs have a `daemon` or `mcp`
+  // subcommand, and the orphan-port scan runs this predicate over the WHOLE
+  // process table, so without the executable half it would mistake someone
+  // else's leftover `mcp` server for one of Claude's helpers and hide it.
+  test("identifies a helper by its executable, not just its subcommand", () => {
+    expect(isClaudeHelper(proc("claude", null, "bg-pty-host"))).toBe(true);
+    expect(isClaudeHelper(proc("claude", null, "daemon"))).toBe(true);
+    expect(
+      isClaudeHelper(proc("2.1.206", "/u/claude/versions/2.1.206", "bg-spare")),
+    ).toBe(true);
+
+    expect(isClaudeHelper(proc("claude", null, null))).toBe(false); // a session
+    expect(isClaudeHelper(proc("colima", "/usr/bin/colima", "daemon"))).toBe(
+      false,
     );
-    expect(__test.isClaudeHelper(proc("claude", null, "daemon"))).toBe(true);
-    expect(__test.isClaudeHelper(proc("claude", null, null))).toBe(false);
-    expect(__test.isClaudeHelper(proc("node", "/usr/bin/node", null))).toBe(
+    expect(isClaudeHelper(proc("some-cli", "/usr/bin/some-cli", "mcp"))).toBe(
       false,
     );
   });
