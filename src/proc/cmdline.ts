@@ -53,12 +53,13 @@ export function parseProcArgs(buf: Uint8Array, len: number): string[] {
 // has one in its first token, a title does not.
 export function parseCommand(argv: string[]): Command {
   const argv0 = argv[0] ?? "";
-  const space = argv0.indexOf(" ");
-  const titled = space > 0 && !argv0.slice(0, space).includes("/");
-  const cmd = titled ? argv0.slice(0, space) : argv0;
-  const next = titled ? argv0.slice(space + 1).split(" ")[0] : argv[1];
+  // a title's first token is a bare program name; a path's holds a slash
+  const titled = /^[^/ ]+ /.test(argv0);
+  const [cmd = "", next] = titled ? argv0.split(" ") : [argv0, argv[1]];
   // a flag is not a subcommand, and neither is a path (`claude /tmp/prompt.md`)
   const sub =
     next && !next.startsWith("-") && !next.startsWith("/") ? next : null;
-  return { name: cmd.split("/").pop() || null, sub };
+  // a title's program name often carries a trailing colon ("tmux: server",
+  // "nginx: master process …") — it is punctuation, not part of the name
+  return { name: cmd.split("/").pop()?.replace(/:$/, "") || null, sub };
 }

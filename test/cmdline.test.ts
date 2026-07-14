@@ -85,6 +85,29 @@ describe("command line parsing (parseCommand)", () => {
       ]),
     ).toEqual({ name: "Electron", sub: null });
   });
+
+  // Claude's helpers are not the only processes that rewrite their title, and
+  // the name this yields is what the HOST column and the sub-process rows show —
+  // so the common ones are pinned. The trailing colon is punctuation: without
+  // stripping it, hostApp would be matching "sshd:" and rows would read "nginx:".
+  test("names a process that rewrote its title, colon and all", () => {
+    expect(parseCommand(["tmux: server"])).toEqual({
+      name: "tmux",
+      sub: "server",
+    });
+    expect(parseCommand(["sshd-session: daniel [priv]"])).toEqual({
+      name: "sshd-session",
+      sub: "daniel",
+    });
+    expect(parseCommand(["nginx: master process /usr/sbin/nginx"])).toEqual({
+      name: "nginx",
+      sub: "master",
+    });
+    expect(parseCommand(["redis-server *:6379"])).toEqual({
+      name: "redis-server",
+      sub: "*:6379",
+    });
+  });
 });
 
 // The macOS half of the same job: sysctl fills a raw KERN_PROCARGS2 block and

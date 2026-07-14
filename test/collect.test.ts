@@ -770,9 +770,11 @@ describe("host resolution", () => {
     expect(__test.hostApp(claude, tree([claude, shell, term]))).toBe("Ghostty");
   });
 
+  // the names here are the ones parseCommand actually yields for these hosts:
+  // both rewrite their process title ("tmux: server", "sshd-session: user@pts/0")
   test("recognizes tmux and ssh by process name", () => {
     const claude = proc({ pid: 20, ppid: 21 });
-    const tmux = proc({ pid: 21, ppid: 1, name: "tmux: server" });
+    const tmux = proc({ pid: 21, ppid: 1, name: "tmux" });
     expect(__test.hostApp(claude, tree([claude, tmux]))).toBe("tmux");
 
     const claude2 = proc({ pid: 30, ppid: 31 });
