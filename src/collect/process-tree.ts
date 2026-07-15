@@ -30,9 +30,19 @@ import type { Proc } from "../proc.ts";
 // executable half it would mistake someone else's `mcp` server for one of ours.
 const CLAUDE_COMMANDS = new Set(["daemon", "mcp"]);
 
-// The version-named executable lives under .../claude/versions/2.1.176
+// Running the Claude Code executable is not the same as being Claude Code. It
+// lives under .../claude/versions/2.1.176, and it is multicall, busybox-style:
+// the bundled tools re-exec that same binary with argv[0] set to the tool's
+// name. So a `ugrep` a session spawned carries the session's exec path while
+// being no such thing — and matching on the path alone made it a session.
+//
+// argv[0] settles it. A session is invoked as `claude`, or — nested, resumed,
+// backgrounded — as the version-named binary itself, where argv[0] IS the exec
+// path's last segment. A re-exec'd tool never is.
 const isClaudeExe = (p: Proc) =>
-  p.name === "claude" || /\/claude\/versions\/\d/.test(p.path ?? "");
+  p.name === "claude" ||
+  (/\/claude\/versions\/\d/.test(p.path ?? "") &&
+    !!p.path?.endsWith(`/${p.name}`));
 
 export const isClaudeHelper = (p: Proc) =>
   isClaudeExe(p) &&
