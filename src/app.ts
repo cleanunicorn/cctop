@@ -6,6 +6,7 @@
 // sort), windows the table to the terminal, draws the detail/help/confirm
 // overlays, and runs process actions (quit a session).
 
+import { selfStamp } from "./binary.ts";
 import {
   collectHistory,
   collectRows,
@@ -241,6 +242,24 @@ export async function runApp(opts: AppOptions): Promise<void> {
     state.messageUntil = Date.now() + 4000;
   };
 
+  // --- self-upgrade notice -------------------------------------------------
+  // `cctop upgrade` (or a re-run of install.sh) swaps the binary with rename(2):
+  // the directory entry points at the new inode while this process keeps
+  // executing the old one, so a TUI left running elsewhere silently stays on the
+  // old version forever. Stamp the file at startup and watch for it to change.
+  // Purely local (two stat calls, no network) — the read-only monitor contract
+  // in AGENTS.md holds. Latched: say it once, not every refresh.
+  const stampAtStart = selfStamp();
+  let restartNoticed = false;
+  const checkForRestart = () => {
+    if (restartNoticed || !stampAtStart) return;
+    const stamp = selfStamp();
+    // null = the file vanished (uninstalled mid-run); unknown, not changed.
+    if (!stamp || stamp === stampAtStart) return;
+    restartNoticed = true;
+    flash("cctop was updated on disk — restart to run the new version", YELLOW);
+  };
+
   // --- data refresh --------------------------------------------------------
   let refreshing = false;
   const refresh = async () => {
@@ -253,6 +272,7 @@ export async function runApp(opts: AppOptions): Promise<void> {
     } finally {
       refreshing = false;
     }
+    checkForRestart();
     // Track busy→idle flips every refresh (so toggling notifications on never
     // fires for stale transitions), ring only when enabled. All sessions
     // count, not just filtered ones — the filter is a view concern.

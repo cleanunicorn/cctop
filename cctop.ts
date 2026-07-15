@@ -41,10 +41,15 @@ const HELP = `\x1b[1mcctop\x1b[0m - monitor running Claude Code sessions
 
 \x1b[1mUsage:\x1b[0m
   cctop [filter] [options]
+  cctop upgrade [--check]
 
 \x1b[1mArguments:\x1b[0m
   filter                 only show sessions whose project, host, branch,
                          model, or session id contains this
+
+\x1b[1mCommands:\x1b[0m
+  upgrade [--check]      update the standalone binary to the latest release;
+                         --check only reports whether a newer version exists
 
 \x1b[1mOptions:\x1b[0m
   -w, --watch[=seconds]  set the refresh interval (default: 1s, min 0.25s);
@@ -86,6 +91,20 @@ let once = false; // force a single frame and exit
 let asJson = false;
 let capture = false; // status-line tap: persist usage from stdin, then exit
 const args = Bun.argv.slice(2);
+
+// The self-updater is a separate, explicit mode: the only path that reaches the
+// network and rewrites cctop's own binary (the monitor stays read-only and
+// offline). Dispatch it before the flag parser so `cctop upgrade` never falls
+// through to the filter positional, and load it lazily so the monitor never
+// even imports the network/fs-mutating code.
+if (args[0] === "upgrade") {
+  const rest = args.slice(1);
+  const unknown = rest.find((a) => a !== "--check");
+  if (unknown) fail(`unknown argument for upgrade: ${unknown}`);
+  const { runUpgrade } = await import("./src/upgrade.ts");
+  process.exit(await runUpgrade(VERSION, { check: rest.includes("--check") }));
+}
+
 for (let i = 0; i < args.length; i++) {
   const arg = args[i];
   if (arg === "-h" || arg === "--help") {
