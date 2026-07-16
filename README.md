@@ -1,8 +1,8 @@
 # cctop
 
-Interactive top-style monitor for Claude Code sessions. Know at a glance what
-Claude is working on, how much context it has left, and which sessions are
-waiting for input.
+Interactive top-style monitor for Claude Code and OpenAI Codex CLI sessions.
+Know at a glance what your agents are working on, how much context they have
+left, and which sessions are waiting for input.
 
 <p align="center">
   <img src="docs/screens/cctop-tui.png" alt="cctop">
@@ -13,6 +13,10 @@ waiting for input.
 - **All your sessions at a glance** — every running Claude Code session in one
   table: process stats (PID, memory, CPU, uptime), busy/idle state, context
   size, model, host app (terminal or IDE), project, git branch, and last prompt.
+- **Codex sessions too** — running OpenAI Codex CLI sessions appear in the same
+  table (badged `codex` in the VER column), with their model, context size,
+  branch, and last prompt read from `~/.codex`; busy/idle is inferred from the
+  rollout since Codex writes no status. History (`h`) remains Claude-only.
 - **Sub-agent & process tree** — live sub-agents (with their latest turn) and
   each session's sub-processes, open and orphaned TCP ports.
 - **Live TUI** — navigate with the keyboard, open a per-session detail view, and
@@ -27,8 +31,8 @@ waiting for input.
 - **Session history** (`h`) — a dashboard over past sessions: a per-day
   token-usage chart, recent sessions, and breakdowns by model, tool/MCP, and
   project.
-- **Read-only and local** — the TUI reads only `~/.claude` and the process table,
-  spawns no processes.
+- **Read-only and local** — the TUI reads only `~/.claude`, `~/.codex`, and the
+  process table, spawns no processes.
 - **Zero dependencies** — a single Bun program with no npm packages;
   it uses only the Bun runtime and OS built-ins.
 

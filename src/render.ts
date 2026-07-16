@@ -142,6 +142,9 @@ function styleCell(key: string, value: string, raw: Instance) {
     case "prompt":
       // a new session's "new session" placeholder reads as dim chrome, not text
       return isNew(raw) ? `${DIM}${value}${RESET}` : value;
+    case "ver":
+      // the codex provider badge stands out in blue; Claude versions stay plain
+      return raw.provider === "codex" ? `${BLUE}${value}${RESET}` : value;
     default:
       return value;
   }
@@ -225,7 +228,9 @@ export function buildFrame(
       state: r.state,
       ctx: r.contextTokens ? formatTokens(r.contextTokens) : "-",
       model: safe(shortModel(r.model)),
-      ver: safe(r.version),
+      // codex sessions carry no version string like Claude's "2.1.177"; badge
+      // the column with the provider name so a codex row is unmistakable
+      ver: r.provider === "codex" ? "codex" : safe(r.version),
       host: safe(r.host),
       project: safe(shortProject(r.project)),
       branch: safe(r.branch),

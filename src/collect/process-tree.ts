@@ -12,6 +12,15 @@ import type { Proc } from "../proc.ts";
 export const isClaudeProc = (p: Proc) =>
   p.name === "claude" || /\/claude\/versions\/\d/.test(p.path ?? "");
 
+// A standalone OpenAI Codex CLI process. Its executable is named `codex` (a
+// native codex-rs binary), so match the argv0 basename or a path ending in
+// /codex. Like isClaudeProc this promotes the process to a top-level session
+// row; the candidate-pid exclusion in resolveProc then keeps it from also
+// appearing as a sub-process of whatever launched it. `codex` also stays in
+// AGENT_CLIS below (see the note there) — the two roles don't conflict.
+export const isCodexProc = (p: Proc) =>
+  p.name === "codex" || (p.path?.endsWith("/codex") ?? false);
+
 export const versionFromPath = (path: string | null) =>
   path
     ?.split("/")
@@ -63,6 +72,12 @@ const WRAPPER_NAMES = new Set([
 // one of these is an agent at work, not a background tool — the renderers
 // mark it live (green dot) and paint the row cyan like the Claude sub-agent
 // rows, so delegated agents stand out from the process noise.
+//
+// `codex` appears here as well as in isCodexProc: a codex process detected by
+// pid becomes its own top-level row (and is excluded from every child list),
+// while this name-match still catches a codex reached through a wrapper/renamed
+// exe the pid heuristic misses — e.g. a `bash › npx › codex` leaf chain — and
+// keeps its parent reading busy. A given pid is only ever one or the other.
 const AGENT_CLIS = new Set([
   "copilot",
   "kiro",

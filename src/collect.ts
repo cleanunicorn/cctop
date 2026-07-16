@@ -15,6 +15,15 @@
 // the same agents (see attachSubagentsInOrder).
 
 import { statSync } from "node:fs";
+import { buildCodexIndex } from "./collect/codex/rollout.ts";
+import {
+  codexState,
+  pruneCodexTranscriptCaches,
+  rolloutDetails,
+  rolloutDetailsCached,
+  sessionMeta,
+  toDetails,
+} from "./collect/codex/transcript.ts";
 import { describeAssistant } from "./collect/entry.ts";
 import { attachOrphanPorts, projectForCwd } from "./collect/orphans.ts";
 import { projectDir } from "./collect/paths.ts";
@@ -25,6 +34,7 @@ import {
   indexChildren,
   isAgentCmd,
   isClaudeProc,
+  isCodexProc,
   pruneCpuSamples,
   subprocsOf,
   versionFromPath,
@@ -97,11 +107,16 @@ export const __test = {
   effectiveState,
   isAgentCmd,
   isClaudeProc,
+  isCodexProc,
   versionFromPath,
   indexChildren,
   subprocsOf,
   descendants,
   projectForCwd,
+  sessionMeta,
+  rolloutDetails,
+  codexState,
+  buildCodexIndex,
 };
 
 export async function collectRows(filter: string | null): Promise<Instance[]> {
@@ -111,7 +126,15 @@ export async function collectRows(filter: string | null): Promise<Instance[]> {
   const sessions = await readSessions();
 
   const candidates = procs.filter(
-    (p) => isClaudeProc(p) || sessions.has(p.pid),
+    (p) => isClaudeProc(p) || isCodexProc(p) || sessions.has(p.pid),
+  );
+  // Resolve every live codex process to its rollout transcript in one pass (a
+  // no-op when none are running). Codex has no per-pid registry, so this stands
+  // in for readSessions(): it maps pid -> {rollout path, cwd, branch, id, …}.
+  const codexIndex = await buildCodexIndex(
+    candidates
+      .filter((p) => !sessions.has(p.pid) && isCodexProc(p))
+      .map((p) => ({ pid: p.pid, startSec: p.startSec })),
   );
   // every top-level row's PID, so the sub-process tree can exclude all of them
   // (not just the heuristic-detected ones) and never double-list a session
@@ -167,7 +190,69 @@ export async function collectRows(filter: string | null): Promise<Instance[]> {
       ) {
         s = null;
       }
-      if (!s && !isClaudeProc(p)) return null; // stale entry only
+      // a standalone codex process is not a Claude session (it has no registry
+      // entry); resolve it from its rollout in the codex branch below instead
+      const codex = !s && isCodexProc(p);
+      if (!s && !codex && !isClaudeProc(p)) return null; // stale entry only
+
+      // the sub-process tree and host are provider-neutral, so derive them once
+      // and share them across both the codex and Claude row assembly below
+      const children = subprocsOf(p.pid, childrenOf, candidatePids)
+        .sort((a, b) => b.rss - a.rss || a.pid - b.pid)
+        .map((c) => ({
+          pid: c.pid,
+          name: c.name,
+          mem: c.rss,
+          cpu: cpuPercent(c, nowMs),
+          uptimeSec: c.startSec ? nowMs / 1000 - c.startSec : 0,
+          ports: portsFor(c.pid),
+          agent: isAgentCmd(c.name),
+        }));
+      const base = {
+        pid: p.pid,
+        mem: p.rss,
+        cpu: cpuPercent(p, nowMs),
+        uptimeSec: p.startSec ? nowMs / 1000 - p.startSec : 0,
+        startSec: p.startSec,
+        host: hostApp(p, byPid),
+        children,
+        orphanPorts: [], // filled after all rows are known (attribution by cwd)
+      };
+
+      // codex: no per-pid registry and no status file, so the rollout index
+      // supplies cwd/branch/id and the tail parser supplies model/ctx/prompt;
+      // busy/idle is inferred (codexState) since codex writes no status.
+      if (codex) {
+        const r = codexIndex.get(p.pid) ?? null;
+        const cwd = r?.cwd ?? cwdOf(p.pid);
+        let details: Details = {};
+        let status: string | null = null;
+        if (r) {
+          const rd = await rolloutDetailsCached(r.path, r.mtimeMs);
+          details = toDetails(r, rd);
+          status = codexState(rd.running, r.mtimeMs, nowMs);
+        }
+        const lastMs = r?.mtimeMs ?? 0;
+        return {
+          ...base,
+          provider: "codex",
+          state: effectiveState(status, children),
+          kind: "codex",
+          sessionId: r?.sessionId ?? null,
+          sessionName: null,
+          version: r?.cliVersion ?? null,
+          project: cwd,
+          branch: details.branch ?? null,
+          model: details.model ?? null,
+          contextTokens: details.ctx ?? null,
+          lastActivity: lastMs ? new Date(lastMs).toISOString() : null,
+          lastMs,
+          prompt: details.prompt ?? null,
+          promptAt: details.promptAt ?? null,
+          lastTurn: details.lastTurn ?? null,
+          transcript: r?.path ?? null,
+        };
+      }
 
       const cwd = s?.cwd ?? cwdOf(p.pid);
       const transcript = s
@@ -183,29 +268,14 @@ export async function collectRows(filter: string | null): Promise<Instance[]> {
       if (mtimeMs)
         details = await transcriptDetailsCached(transcript!, mtimeMs);
       const lastMs = Math.max(s?.updatedAt ?? 0, mtimeMs);
-      const children = subprocsOf(p.pid, childrenOf, candidatePids)
-        .sort((a, b) => b.rss - a.rss || a.pid - b.pid)
-        .map((c) => ({
-          pid: c.pid,
-          name: c.name,
-          mem: c.rss,
-          cpu: cpuPercent(c, nowMs),
-          uptimeSec: c.startSec ? nowMs / 1000 - c.startSec : 0,
-          ports: portsFor(c.pid),
-          agent: isAgentCmd(c.name),
-        }));
       return {
-        pid: p.pid,
-        mem: p.rss,
-        cpu: cpuPercent(p, nowMs),
-        uptimeSec: p.startSec ? nowMs / 1000 - p.startSec : 0,
-        startSec: p.startSec,
+        ...base,
+        provider: "claude",
         state: effectiveState(s?.status, children),
         kind: s?.kind ?? null,
         sessionId: s?.sessionId ?? null,
         sessionName: s?.name ?? null,
         version: s?.version ?? versionFromPath(p.path),
-        host: hostApp(p, byPid),
         project: cwd,
         branch: details.branch ?? null,
         model: details.model ?? null,
@@ -216,8 +286,6 @@ export async function collectRows(filter: string | null): Promise<Instance[]> {
         promptAt: details.promptAt ?? null,
         lastTurn: details.lastTurn ?? null,
         transcript: mtimeMs ? transcript : null,
-        children,
-        orphanPorts: [], // filled after all rows are known (attribution by cwd)
       };
     }),
   );
@@ -234,6 +302,10 @@ export async function collectRows(filter: string | null): Promise<Instance[]> {
     new Set(rows.map((r) => r.transcript).filter((p): p is string => !!p)),
   );
   pruneAgentCache(seenAgents);
+  // codex meta/details caches keyed to the rollouts still backing a live row
+  pruneCodexTranscriptCaches(
+    new Set([...codexIndex.values()].map((r) => r.path)),
+  );
 
   return rows
     .filter((r) => matchRow(r, filter))

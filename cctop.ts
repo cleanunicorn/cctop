@@ -12,12 +12,18 @@
 // Live sub-agents (Task / Workflow) appear as in-process rows. Useful when many
 // sessions run at once in different shells and IDEs.
 //
+// Standalone OpenAI Codex CLI sessions are monitored the same way, resolved
+// from ~/.codex/sessions rollouts (see src/collect/codex/).
+//
 // Data sources, all local and read-only, no subprocesses:
 //
 //   1. The process table: macOS libproc via bun:ffi, or /proc on Linux.
 //   2. ~/.claude/sessions/<pid>.json: the per-process session registry.
 //   3. The session transcript ~/.claude/projects/<dir>/<id>.jsonl: only the
 //      tail is read, for the model, context tokens, git branch, last prompt.
+//   4. Codex has no per-pid registry, so a running `codex` process is matched
+//      to its rollout ~/.codex/sessions/<date>/rollout-*.jsonl by cwd + start
+//      time; the same tail read yields model, context, branch, and last prompt.
 //
 // On an interactive terminal it runs as a live TUI with keyboard navigation,
 // a per-session detail view, and actions (quit a session); when piped,

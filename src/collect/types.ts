@@ -32,6 +32,10 @@ export interface SubAgent {
 
 export interface Instance {
   pid: number;
+  // which CLI this session belongs to: Claude Code, or the OpenAI Codex CLI.
+  // Almost every field is provider-neutral; this discriminates the few places
+  // that differ (the transcript source behind the row, and the VER badge).
+  provider: "claude" | "codex";
   mem: number;
   cpu: number;
   uptimeSec: number;

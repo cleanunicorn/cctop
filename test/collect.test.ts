@@ -17,7 +17,7 @@ import {
   type Instance,
   matchRow,
 } from "../src/collect.ts";
-import type { Proc } from "../src/proc.ts";
+import { cwdOf, type Proc } from "../src/proc.ts";
 
 // A JSONL transcript on disk: one JSON value per line, as Claude Code writes it.
 const jsonl = (entries: unknown[]) =>
@@ -44,6 +44,7 @@ const user = (content: unknown, extra: Record<string, unknown> = {}) => ({
 
 const row = (overrides: Partial<Instance> = {}): Instance => ({
   pid: 12345,
+  provider: "claude",
   mem: 0,
   cpu: 0,
   uptimeSec: 1,
@@ -1166,5 +1167,277 @@ describe("usage capture (captureUsage)", () => {
   test("never throws on invalid input", async () => {
     expect(await captureUsage("not json", join(dir, "e.json"))).toBe(false);
     expect(await captureUsage("", join(dir, "f.json"))).toBe(false);
+  });
+});
+
+// --- Codex CLI session monitoring ------------------------------------------
+
+// Codex rollout record builders: each line is a { timestamp, type, payload }
+// envelope, the shape codex-rs writes to ~/.codex/sessions/<date>/rollout-*.jsonl.
+const meta = (
+  cwd: string,
+  extra: Record<string, unknown> = {},
+  ts = "2026-07-16T10:00:00.000Z",
+) => ({
+  timestamp: ts,
+  type: "session_meta",
+  payload: {
+    id: "sess-uuid",
+    timestamp: ts,
+    cwd,
+    cli_version: "0.20.0",
+    git: { branch: "main" },
+    ...extra,
+  },
+});
+const turnCtx = (model: string) => ({
+  timestamp: "2026-07-16T10:00:01.000Z",
+  type: "turn_context",
+  payload: { model, cwd: "/x" },
+});
+const userMsg = (text: string, ts = "2026-07-16T10:00:02.000Z") => ({
+  timestamp: ts,
+  type: "response_item",
+  payload: {
+    type: "message",
+    role: "user",
+    content: [{ type: "input_text", text }],
+  },
+});
+const asstMsg = (text: string) => ({
+  timestamp: "2026-07-16T10:00:03.000Z",
+  type: "response_item",
+  payload: {
+    type: "message",
+    role: "assistant",
+    content: [{ type: "output_text", text }],
+  },
+});
+const funcCall = (name: string, args: unknown) => ({
+  timestamp: "2026-07-16T10:00:04.000Z",
+  type: "response_item",
+  payload: { type: "function_call", name, arguments: JSON.stringify(args) },
+});
+const tokenCount = (usage: Record<string, number>) => ({
+  timestamp: "2026-07-16T10:00:05.000Z",
+  type: "event_msg",
+  payload: { type: "token_count", info: { last_token_usage: usage } },
+});
+
+describe("codex process identification", () => {
+  const proc = (name: string, path: string | null): Proc => ({
+    pid: 1,
+    ppid: 1,
+    rss: 0,
+    cpuSec: 0,
+    startSec: 0,
+    path,
+    name,
+  });
+
+  test("matches by name or an executable path basename", () => {
+    expect(__test.isCodexProc(proc("codex", null))).toBe(true);
+    expect(__test.isCodexProc(proc("codex", "/usr/local/bin/codex"))).toBe(
+      true,
+    );
+    expect(__test.isCodexProc(proc("node", "/usr/bin/node"))).toBe(false);
+    expect(__test.isCodexProc(proc("claude", null))).toBe(false);
+  });
+});
+
+describe("codex rollout parsing", () => {
+  let dir: string;
+  const write = (name: string, entries: unknown[]) => {
+    const p = join(dir, name);
+    writeFileSync(p, jsonl(entries));
+    return p;
+  };
+
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), "cctop-codex-"));
+  });
+  afterAll(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("reads the immutable header from a rollout", async () => {
+    const path = write("meta.jsonl", [
+      meta("/Users/bob/src/app", { id: "abc", cli_version: "0.21.0" }),
+      turnCtx("gpt-5-codex"),
+    ]);
+    expect(await __test.sessionMeta(path)).toEqual({
+      cwd: "/Users/bob/src/app",
+      sessionId: "abc",
+      startMs: Date.parse("2026-07-16T10:00:00.000Z"),
+      branch: "main",
+      cliVersion: "0.21.0",
+    });
+  });
+
+  test("returns null when no session_meta line is present", async () => {
+    const path = write("nometa.jsonl", [turnCtx("gpt-5-codex")]);
+    expect(await __test.sessionMeta(path)).toBeNull();
+  });
+
+  test("pulls model, context, prompt, and last turn from the tail", async () => {
+    const at = "2026-07-16T10:00:02.000Z";
+    const path = write("session.jsonl", [
+      meta("/w"),
+      userMsg("please refactor the parser", at),
+      turnCtx("gpt-5-codex"),
+      asstMsg("on it"),
+      tokenCount({
+        input_tokens: 1200,
+        cached_input_tokens: 800,
+        total_tokens: 1300,
+      }),
+    ]);
+    const d = await __test.rolloutDetails(path);
+    expect(d.model).toBe("gpt-5-codex");
+    expect(d.ctx).toBe(1200); // input side of the last turn's usage
+    expect(d.prompt).toBe("please refactor the parser");
+    expect(d.promptAt).toBe(Date.parse(at));
+    expect(d.lastTurn).toBe("on it");
+  });
+
+  test("skips XML-wrapped context blocks when picking the prompt", async () => {
+    const path = write("wrapped.jsonl", [
+      meta("/w"),
+      userMsg("<environment_context>cwd=/w</environment_context>"),
+      userMsg("the real question"),
+    ]);
+    expect((await __test.rolloutDetails(path)).prompt).toBe(
+      "the real question",
+    );
+  });
+
+  test("last turn reports a tool call with its command", async () => {
+    const path = write("tool.jsonl", [
+      meta("/w"),
+      funcCall("shell", { command: ["bash", "-lc", "ls -la"] }),
+    ]);
+    expect((await __test.rolloutDetails(path)).lastTurn).toBe(
+      "shell: bash -lc ls -la",
+    );
+  });
+
+  test("running is true when the last record is an in-flight tool call", async () => {
+    const busy = write("busy.jsonl", [
+      meta("/w"),
+      funcCall("shell", { command: ["sleep", "5"] }),
+    ]);
+    const done = write("done.jsonl", [
+      meta("/w"),
+      asstMsg("all done"),
+      tokenCount({ input_tokens: 10, total_tokens: 12 }),
+    ]);
+    expect((await __test.rolloutDetails(busy)).running).toBe(true);
+    expect((await __test.rolloutDetails(done)).running).toBe(false);
+  });
+
+  test("never throws on a malformed or empty rollout", async () => {
+    expect(await __test.rolloutDetails(join(dir, "missing.jsonl"))).toEqual({
+      running: false,
+    });
+    const bad = join(dir, "bad.jsonl");
+    writeFileSync(bad, "{ not json\n");
+    expect(await __test.rolloutDetails(bad)).toEqual({ running: false });
+  });
+});
+
+describe("codex state inference", () => {
+  const now = 1_800_000_000_000;
+  test("busy when a record was written within the live window", () => {
+    expect(__test.codexState(false, now - 5_000, now)).toBe("busy");
+  });
+  test("idle when quiet and no tool call is outstanding", () => {
+    expect(__test.codexState(false, now - 60_000, now)).toBe("idle");
+  });
+  test("busy when quiet but a tool call is still outstanding", () => {
+    expect(__test.codexState(true, now - 60_000, now)).toBe("busy");
+  });
+  test("idle once even an outstanding call passes the busy window", () => {
+    expect(__test.codexState(true, now - 200_000, now)).toBe("idle");
+  });
+});
+
+describe("codex rollout resolution", () => {
+  let home: string;
+  let root: string;
+  const prevHome = process.env.CODEX_HOME;
+
+  // place a rollout under sessions/<UTC date of startMs>/, as codex partitions
+  const writeRollout = (startMs: number, tag: string, entries: unknown[]) => {
+    const d = new Date(startMs);
+    const p2 = (n: number) => String(n).padStart(2, "0");
+    const day = join(
+      root,
+      String(d.getUTCFullYear()),
+      p2(d.getUTCMonth() + 1),
+      p2(d.getUTCDate()),
+    );
+    mkdirSync(day, { recursive: true });
+    const path = join(day, `rollout-${tag}.jsonl`);
+    writeFileSync(path, jsonl(entries));
+    return path;
+  };
+
+  beforeAll(() => {
+    home = mkdtempSync(join(tmpdir(), "cctop-codexhome-"));
+    root = join(home, "sessions");
+    process.env.CODEX_HOME = home;
+  });
+  afterAll(() => {
+    if (prevHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = prevHome;
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  test("no codex processes → empty index, no disk work", async () => {
+    expect((await __test.buildCodexIndex([])).size).toBe(0);
+  });
+
+  // the process's cwd exactly as the collector reads it, so the fixture's
+  // session_meta.cwd matches regardless of any symlink resolution
+  const procCwd = cwdOf(process.pid) ?? process.cwd();
+
+  test("resolves a pid to the rollout matching its cwd and start", async () => {
+    const startSec = Math.floor(Date.now() / 1000) - 30;
+    const startMs = startSec * 1000;
+    // a decoy in a different project, started a touch earlier, must not win:
+    // it loses on cwd, and on start-delta even if cwd can't be read
+    writeRollout(startMs - 40_000, "decoy", [
+      meta(
+        "/somewhere/else",
+        { id: "decoy" },
+        new Date(startMs - 40_000).toISOString(),
+      ),
+    ]);
+    const want = writeRollout(startMs, "want", [
+      meta(procCwd, { id: "want" }, new Date(startMs).toISOString()),
+      turnCtx("gpt-5-codex"),
+    ]);
+
+    const index = await __test.buildCodexIndex([
+      { pid: process.pid, startSec },
+    ]);
+    const r = index.get(process.pid);
+    expect(r?.path).toBe(want);
+    expect(r?.sessionId).toBe("want");
+    expect(r?.cwd).toBe(procCwd);
+    expect(r?.branch).toBe("main");
+  });
+
+  test("no match when the start time is outside the tolerance", async () => {
+    // a distinct start (unmemoized) far from every fixture written above
+    const startSec = Math.floor(Date.now() / 1000) - 5000;
+    const staleMs = (startSec - 600) * 1000;
+    writeRollout(staleMs, "stale", [
+      meta(procCwd, { id: "stale" }, new Date(staleMs).toISOString()),
+    ]);
+    const index = await __test.buildCodexIndex([
+      { pid: process.pid, startSec },
+    ]);
+    expect(index.has(process.pid)).toBe(false);
   });
 });

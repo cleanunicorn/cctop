@@ -99,16 +99,25 @@ export function noteEntry(details: Details, e: any) {
 const TAIL_CHUNK = 256 * 1024;
 export const MAX_TAIL_BYTES = 4 * 1024 * 1024;
 
-// Reads the tail through Bun.file's async API, so collectRows can scan many
-// sessions' transcripts concurrently. This used node:fs readSync until Bun
-// fixed a bug where async file I/O stalled while the process held the TTY in
-// raw mode on the alternate screen — which is exactly the live TUI's state.
-export async function transcriptDetails(path: string): Promise<Details> {
-  const details: Details = {};
+// Scan a JSONL file backward from EOF, parsing each complete line as JSON and
+// invoking `onEntry` newest-first. Stops as soon as `onEntry` returns true, or
+// once MAX_TAIL_BYTES have been scanned. Handles the byte-level hazards once so
+// callers don't: chunk-boundary line splits (carry), multibyte-safe slicing
+// (bytes, not text), and half-written trailing lines (unparseable → skipped).
+// Shared by the Claude transcript reader and the Codex rollout reader.
+//
+// Reads through Bun.file's async API, so collectRows can scan many sessions'
+// transcripts concurrently. This used node:fs readSync until Bun fixed a bug
+// where async file I/O stalled while the process held the TTY in raw mode on
+// the alternate screen — which is exactly the live TUI's state.
+export async function scanTailEntries(
+  path: string,
+  onEntry: (entry: any) => boolean,
+): Promise<void> {
   try {
     const file = Bun.file(path);
     const size = file.size;
-    if (!size) return details; // gone, empty, or unreadable
+    if (!size) return; // gone, empty, or unreadable
     // bytes (not text: chunk cuts can split multibyte chars) of the line
     // straddling the current chunk boundary, completed by the next chunk
     let carry = Buffer.alloc(0);
@@ -137,13 +146,22 @@ export async function transcriptDetails(path: string): Promise<Details> {
         } catch {
           continue; // line being appended right now
         }
-        if (noteEntry(details, entry)) return details;
+        if (onEntry(entry)) return;
       }
       end = start;
     }
   } catch {
     // gone or unreadable (permissions)
   }
+}
+
+// The tail of a Claude transcript yields the newest model + context size, git
+// branch, and last user prompt. Stops as soon as every detail is found; long
+// sessions grow to tens of MB and big tool results can push the last prompt far
+// from the tail, so the backward scan (still bounded) beats a fixed tail window.
+export async function transcriptDetails(path: string): Promise<Details> {
+  const details: Details = {};
+  await scanTailEntries(path, (entry) => noteEntry(details, entry));
   return details;
 }
 
