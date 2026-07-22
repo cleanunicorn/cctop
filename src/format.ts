@@ -122,9 +122,23 @@ export function tildePath(path: string) {
 const stateColor = (state: string) =>
   state === "busy" ? BRIGHT_GREEN : state === "?" ? DIM : RED;
 
-// the state as a status dot rather than a word; "·" only for the unknown state
-export const stateDot = (state: string) =>
-  state === "?" ? `${DIM}·${RESET}` : `${stateColor(state)}●${RESET}`;
+// Marks the session that rang the terminal bell: a hollow circle against the
+// filled ● of a working/idle session — the dot "opened up", waiting on you.
+// Single-width like the ● it replaces, so gutter alignment is automatic, and a
+// plain geometric glyph (not an emoji), so it honors the surrounding SGR and
+// stateColor() paints it red. Note it shares its shape with the ended-session
+// marker (renderDetail's dim ○): color tells them apart — red ○ rang and is
+// live, dim ○ has exited — and they never share a gutter, so it reads cleanly.
+export const BELL = "○";
+
+// the state as a status dot rather than a word; "·" only for the unknown state.
+// `ringing` swaps the filled dot for a hollow one on a session that just stopped
+// and rang for you; the state color carries over, so the busy/idle signal
+// survives the swap and the hollow ring is what marks it as needing you.
+export const stateDot = (state: string, ringing = false) =>
+  state === "?"
+    ? `${DIM}·${RESET}`
+    : `${stateColor(state)}${ringing ? BELL : "●"}${RESET}`;
 
 // the state as a colored word, for places that show it spelled out
 export const stateWord = (state: string) =>

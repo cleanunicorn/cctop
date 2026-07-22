@@ -8,6 +8,7 @@
 
 import type { Instance, NetRate, SubProc, Usage } from "./collect.ts";
 import {
+  BELL,
   BLUE,
   BOLD,
   BRIGHT_GREEN,
@@ -40,6 +41,18 @@ import {
 // A stable identity for a session row that survives re-sorting across
 // refreshes, so the selection cursor stays put.
 export const rowKey = (r: Instance) => r.sessionId ?? `pid:${r.pid}`;
+
+// The row that dinged last — the newest bellAt, or null when nothing is
+// waiting. The single source of truth for "which session rang": the summary's
+// Bell: line names it and the `b` key jumps to it, so both must agree. Ties
+// keep the first in the given order (strict `>`), matching the busy-first,
+// lastMs-desc order rows already arrive in.
+export const newestBell = (rows: Instance[]): Instance | null =>
+  rows.reduce<Instance | null>(
+    (best, r) =>
+      r.bellAt != null && (best === null || r.bellAt > best.bellAt!) ? r : best,
+    null,
+  );
 
 // `min` reserves a stable width for the volatile numeric columns so a
 // changing value (cpu spiking to "100.0%", mem growing) does not resize the
@@ -98,6 +111,23 @@ const safe = (s: string | null | undefined, fallback = "-") =>
 // blocks, so a fresh session reads as fresh instead of broken.
 const isNew = (r: Instance) => !r.prompt && !r.lastTurn && !r.contextTokens;
 
+// How long a session's *row* wears its bell after it rings. Claude Code rings
+// once and the sound is gone, so the row glyph is a decaying echo of that ring:
+// it answers "I just heard a bell — which session was it?" and then gets out of
+// the way, leaving a plain idle dot. The summary's Bell: line does not decay —
+// it names the last session to ding for as long as it is still waiting, so a
+// ding you missed while away is still answered. Both are derived from bellAt:
+// nothing is stored and nothing is dismissed, so cctop shows the same thing
+// whether it has been running for a second or a week — a bell that had to be
+// cleared would be a bell that lies after a restart.
+export const BELL_MS = 30_000;
+
+// A session is ringing if it stopped within the decay window. A bellAt in the
+// future (a session file written by a host with a skewed clock) still reads as a
+// ring, and ages into silence as the window catches up.
+const isRinging = (r: Instance, nowMs: number) =>
+  r.bellAt != null && nowMs - r.bellAt < BELL_MS;
+
 // pid/mem/cpu/uptime + sanitized name of a sub-process, formatted to display
 // strings. Shared by the list-view child cells and the detail-view sub-process
 // row so both format a SubProc identically; the two differ only in how they pad
@@ -124,13 +154,18 @@ const portList = (ports: number[]) => ports.map((p) => `:${p}`).join(" ");
 const portTail = (ports: number[]) =>
   ports.length ? `  ${BRIGHT_GREEN}${portList(ports)}${RESET}` : "";
 
-// Paint a session cell: status dot, heat-colored cpu/ctx, dimmed units,
-// dimmed placeholders; everything else as-is.
-function styleCell(key: string, value: string, raw: Instance) {
+// Paint a session cell: status dot (a bell while it rings), heat-colored
+// cpu/ctx, dimmed units, dimmed placeholders; everything else as-is.
+function styleCell(
+  key: string,
+  value: string,
+  raw: Instance,
+  ringing: boolean,
+) {
   if (value === "-") return `${DIM}-${RESET}`;
   switch (key) {
     case "state":
-      return stateDot(raw.state);
+      return stateDot(raw.state, ringing);
     case "cpu": {
       const c = cpuColor(raw.cpu);
       return c ? heatNum(value, c) : value;
@@ -217,6 +252,7 @@ export function buildFrame(
   const nowMs = Date.now();
   const view = rows.map((r) => ({
     raw: r,
+    ringing: isRinging(r, nowMs),
     cells: {
       pid: String(r.pid),
       mem: formatMem(r.mem),
@@ -287,6 +323,30 @@ export function buildFrame(
   const limits = usageLine(usage ?? null, nowMs);
   if (limits) summary.push(limits);
 
+  // "Bell: ○ cctop · pid 1737989 · 4m ago" — the session that dinged last.
+  // Identified the way the table identifies it: PROJECT says what it is, PID
+  // says which row, and the PID is the only thing here that cannot collide (two
+  // sessions on the same project are ordinary). Deliberately *not* sessionName —
+  // it appears in no column, so a name like "cctop-92" would send you hunting.
+  //
+  // Unlike the row's own bell, this does not decay: it holds the session until
+  // it goes busy again, which clears its bellAt and hands the line to the next
+  // one still waiting. So it stays true for a ding you missed an hour ago, and
+  // it walks the queue as you answer them. Only one entry — the most recent —
+  // since the row glyphs already flag every session that rang inside the window,
+  // and a fixed-shape line keeps the summary from jittering. Last in the summary
+  // (nearest the table) and dropped when nothing waits, so it never shifts the
+  // lines above it.
+  const dinged = newestBell(rows);
+  if (dinged) {
+    const project = safe(shortProject(dinged.project), "?");
+    const ago = formatDuration((nowMs - dinged.bellAt!) / 1000);
+    summary.push(
+      `${DIM}Bell:${RESET} ${RED}${BELL}${RESET} ${project} ` +
+        `${DIM}· pid ${dinged.pid} · ${ago} ago${RESET}`,
+    );
+  }
+
   // widths use the plain cell text (color is added afterward); the state
   // column is the tree gutter, 2 wide — a status dot, or a branch plus a
   // per-child marker (├◆ agent, ├─ process); tree columns also fit child values
@@ -315,13 +375,17 @@ export function buildFrame(
     )
     .join("  ");
 
-  const sessionLine = (cells: Cells, raw: Instance) =>
+  const sessionLine = (cells: Cells, raw: Instance, ringing: boolean) =>
     cols
       .map(({ key, align }, i) => {
         let plain = cells[key];
         if (i === cols.length - 1 && plain.length > widths[i])
           plain = truncate(plain, widths[i]);
-        return pad(styleCell(key, plain, raw), widths[i], align === "r");
+        return pad(
+          styleCell(key, plain, raw, ringing),
+          widths[i],
+          align === "r",
+        );
       })
       .join("  ");
 
@@ -397,7 +461,7 @@ export function buildFrame(
   // Kept together so truncation never orphans them; each kind is capped so one
   // busy session can't fill the view.
   const groups: Group[] = view.map((r) => {
-    const lines = [sessionLine(r.cells, r.raw)];
+    const lines = [sessionLine(r.cells, r.raw, r.ringing)];
 
     const agents = r.subagents.slice(0, MAX_SUBAGENT_ROWS);
     const moreAgents = r.subagents.length - agents.length;
@@ -616,8 +680,12 @@ export function renderDetail(
     ms ? `  ${DIM}${formatDuration((Date.now() - ms) / 1000)} ago${RESET}` : "";
 
   // ended: a hollow dim dot (no live signal) + a yellow badge, so the frozen
-  // panel reads as stopped, not broken
-  const dot = ended ? `${DIM}○${RESET}` : stateDot(r.state);
+  // panel reads as stopped, not broken. A live session that is still inside its
+  // bell window keeps the bell here too, so opening the row you heard confirms
+  // you landed on the right one.
+  const dot = ended
+    ? `${DIM}○${RESET}`
+    : stateDot(r.state, isRinging(r, Date.now()));
   const out: string[] = [];
   const projectShort = safe(shortProject(r.project), "?");
   out.push(

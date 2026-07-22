@@ -29,7 +29,12 @@ import {
   subprocsOf,
   versionFromPath,
 } from "./collect/process-tree.ts";
-import { readSessions, validSession } from "./collect/sessions.ts";
+import {
+  bellFor,
+  bellTime,
+  readSessions,
+  validSession,
+} from "./collect/sessions.ts";
 import { parseSettings } from "./collect/settings.ts";
 import {
   agentContext,
@@ -106,6 +111,8 @@ export const matchRow = (r: Instance, filter: string | null) =>
 // directly. Not part of the public API.
 export const __test = {
   validSession,
+  bellTime,
+  bellFor,
   parseSettings,
   parseUsage,
   noteEntry,
@@ -216,13 +223,14 @@ export async function collectRows(filter: string | null): Promise<Instance[]> {
           ports: portsFor(c.pid),
           agent: isAgentCmd(c.name),
         }));
+      const state = effectiveState(s?.status, children, lastMs, nowMs);
       return {
         pid: p.pid,
         mem: p.rss,
         cpu: cpuPercent(p, nowMs),
         uptimeSec: p.startSec ? nowMs / 1000 - p.startSec : 0,
         startSec: p.startSec,
-        state: effectiveState(s?.status, children, lastMs, nowMs),
+        state,
         kind: s?.kind ?? null,
         sessionId: s?.sessionId ?? null,
         sessionName: s?.name ?? null,
@@ -234,6 +242,7 @@ export async function collectRows(filter: string | null): Promise<Instance[]> {
         contextTokens: details.ctx ?? null,
         lastActivity: lastMs ? new Date(lastMs).toISOString() : null,
         lastMs,
+        bellAt: bellFor(s, state),
         prompt: details.prompt ?? null,
         promptAt: details.promptAt ?? null,
         lastTurn: details.lastTurn ?? null,

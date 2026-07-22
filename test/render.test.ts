@@ -4,16 +4,20 @@
 import { describe, expect, test } from "bun:test";
 import type { Instance, Usage } from "../src/collect.ts";
 import {
+  BELL,
   BLUE,
   BOLD,
   CYAN,
   RED,
   RESET,
   stripAnsi,
+  visLen,
   YELLOW,
 } from "../src/format.ts";
 import {
+  BELL_MS,
   buildFrame,
+  newestBell,
   renderDetail,
   resolveDetail,
   rowKey,
@@ -38,6 +42,7 @@ const baseRow = (overrides: Partial<Instance> = {}): Instance => ({
   contextTokens: 123_456,
   lastActivity: "2026-06-13T12:00:00.000Z",
   lastMs: Date.now(),
+  bellAt: null,
   prompt: "implement tests",
   promptAt: Date.now() - 120_000,
   lastTurn: "Edit: render.ts",
@@ -518,5 +523,168 @@ describe("usage limits line", () => {
   test("returns null when there is no usable data", () => {
     expect(usageLine(null, NOW)).toBeNull();
     expect(usageLine(usage(), NOW)).toBeNull();
+  });
+});
+
+// The bell marks the session behind the terminal bell you just heard: a red ○
+// in the state gutter for BELL_MS after it stopped, plus a summary line naming
+// it. Stateless and decaying, so these assert on bellAt relative to now.
+describe("bell marker", () => {
+  const idle = (over: Partial<Instance> = {}) =>
+    baseRow({ state: "idle", ...over });
+
+  test("swaps the status dot for a bell while a session is ringing", () => {
+    const frame = buildFrame([idle({ bellAt: Date.now() - 4_000 })], 200);
+    const line = frame.groups[0].lines[0];
+    expect(line).toContain(`${RED}${BELL}${RESET}`);
+    expect(line).not.toContain(`${RED}●${RESET}`);
+  });
+
+  test("still rings for a bellAt in the future (skewed clock)", () => {
+    // isRinging reads a future bellAt as ringing (nowMs - bellAt is negative,
+    // which is < BELL_MS); a Math.abs/clamp refactor would silently break this
+    const frame = buildFrame([idle({ bellAt: Date.now() + 10_000 })], 200);
+    expect(frame.groups[0].lines[0]).toContain(`${RED}${BELL}${RESET}`);
+  });
+
+  test("identifies the ringing session by project and pid", () => {
+    // sessionName appears in no column, so the line must not use it — pid is the
+    // only identifier here that is both unique and visible in the table
+    const frame = buildFrame(
+      [
+        idle({
+          pid: 1_737_989,
+          sessionName: "cctop-92",
+          project: "/Users/alice/src/cctop",
+          bellAt: Date.now() - 4_000,
+        }),
+      ],
+      200,
+    );
+    const bell = frame.summary
+      .map(stripAnsi)
+      .find((l) => l.startsWith("Bell:"));
+    expect(bell).toBe(`Bell: ${BELL} cctop · pid 1737989 · 4s ago`);
+    expect(bell).not.toContain("cctop-92");
+  });
+
+  test("pid tells apart two dings on the same project", () => {
+    const now = Date.now();
+    const frame = buildFrame(
+      [
+        idle({ sessionId: "a", pid: 111, bellAt: now - 20_000 }),
+        idle({ sessionId: "b", pid: 222, bellAt: now - 2_000 }),
+      ],
+      200,
+    );
+    // both rows read "cctop" in PROJECT; only the newest is named, by its pid
+    const bell = frame.summary
+      .map(stripAnsi)
+      .find((l) => l.startsWith("Bell:"));
+    expect(bell).toBe(`Bell: ${BELL} cctop · pid 222 · 2s ago`);
+  });
+
+  test("falls back to ? when a session has no project", () => {
+    const frame = buildFrame(
+      [idle({ pid: 42, project: null, bellAt: Date.now() - 1_000 })],
+      200,
+    );
+    const bell = frame.summary
+      .map(stripAnsi)
+      .find((l) => l.startsWith("Bell:"));
+    expect(bell).toBe(`Bell: ${BELL} ? · pid 42 · 1s ago`);
+  });
+
+  test("holds a ding from long ago until its session goes busy again", () => {
+    const now = Date.now();
+    const long = buildFrame(
+      [idle({ pid: 111, bellAt: now - 90 * 60_000 })],
+      200,
+    );
+    expect(long.summary.map(stripAnsi).find((l) => l.startsWith("Bell:"))).toBe(
+      `Bell: ${BELL} cctop · pid 111 · 1h ago`,
+    );
+
+    // answering it turns the session busy, which clears bellAt in collectRows;
+    // the line then hands off to whoever is still waiting
+    const answered = buildFrame(
+      [
+        baseRow({ sessionId: "a", pid: 111, state: "busy", bellAt: null }),
+        idle({ sessionId: "b", pid: 222, bellAt: now - 5_000 }),
+      ],
+      200,
+    );
+    expect(
+      answered.summary.map(stripAnsi).find((l) => l.startsWith("Bell:")),
+    ).toBe(`Bell: ${BELL} cctop · pid 222 · 5s ago`);
+  });
+
+  test("the row glyph decays, but the summary keeps naming the ding", () => {
+    const frame = buildFrame([idle({ bellAt: Date.now() - BELL_MS - 1 })], 200);
+    // the row is back to a plain idle dot ...
+    expect(frame.groups[0].lines[0]).toContain(`${RED}●${RESET}`);
+    expect(frame.groups[0].lines[0]).not.toContain(BELL);
+    // ... while the header still names who rang, however long ago
+    expect(
+      frame.summary.map(stripAnsi).find((l) => l.startsWith("Bell:")),
+    ).toBe(`Bell: ${BELL} cctop · pid 12345 · 30s ago`);
+  });
+
+  test("never rings a busy session", () => {
+    // collectRows leaves bellAt null while busy; the renderer must not invent one
+    const frame = buildFrame([baseRow({ state: "busy", bellAt: null })], 200);
+    expect(frame.groups[0].lines[0]).not.toContain(BELL);
+    expect(frame.summary.some((l) => stripAnsi(l).startsWith("Bell:"))).toBe(
+      false,
+    );
+  });
+
+  test("keeps the columns aligned when a session rings", () => {
+    // ○ is single-width like the ● it replaces, so a ringing row must measure
+    // the same as a dotted one and nothing to its right shifts
+    const now = Date.now();
+    const frame = buildFrame(
+      [
+        idle({ sessionId: "a", bellAt: now - 4_000 }),
+        idle({ sessionId: "b", bellAt: null }),
+      ],
+      200,
+    );
+    const [ringing, quiet] = frame.groups.map((g) => g.lines[0]);
+    expect(visLen(ringing)).toBe(visLen(quiet));
+  });
+
+  test("carries the bell into the detail view, but not once ended", () => {
+    const row = idle({ bellAt: Date.now() - 4_000 });
+    expect(renderDetail(row, 80)[0]).toContain(`${RED}${BELL}${RESET}`);
+    // an ended session's header is a *dim* ○ (same glyph as the bell), so assert
+    // the absence of the red-wrapped bell specifically, not the bare glyph
+    expect(renderDetail(row, 80, true)[0]).not.toContain(
+      `${RED}${BELL}${RESET}`,
+    );
+  });
+});
+
+// newestBell is the shared selector: the Bell: summary line names its result and
+// the `b` key jumps to it, so pinning it here guarantees the two can't drift.
+describe("newestBell", () => {
+  const at = (id: string, bellAt: number | null) =>
+    baseRow({ sessionId: id, state: "idle", bellAt });
+
+  test("returns the row with the newest bellAt", () => {
+    const now = Date.now();
+    const rows = [at("a", now - 20_000), at("b", now - 2_000), at("c", null)];
+    expect(newestBell(rows)?.sessionId).toBe("b");
+  });
+
+  test("keeps the first row on a tie", () => {
+    const t = Date.now() - 5_000;
+    const rows = [at("first", t), at("second", t)];
+    expect(newestBell(rows)?.sessionId).toBe("first");
+  });
+
+  test("returns null when nothing is waiting", () => {
+    expect(newestBell([])).toBeNull();
+    expect(newestBell([at("a", null), at("b", null)])).toBeNull();
   });
 });
