@@ -109,8 +109,9 @@ It is best-effort and cannot disrupt your status line:
 
 ## Why this needs a status-line hook
 
-cctop is read-only: it reads `~/.claude` and the process table, and makes no
-network calls. Claude Code surfaces the limits in exactly two places:
+cctop's monitor is read-only: it reads `~/.claude` and the process table, and
+makes no network calls (its only network access is the explicit `cctop upgrade`
+command). Claude Code surfaces the limits in exactly two places:
 the interactive `/usage` panel, and the`rate_limits` object it passes
 to your configured **status-line command** on stdin, once per turn.
 
