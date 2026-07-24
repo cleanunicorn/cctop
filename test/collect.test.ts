@@ -1324,6 +1324,37 @@ describe("transcript fallback (latestTranscript)", () => {
     const claimed = new Set([paths["live-session.jsonl"]!]);
     expect(__test.latestTranscript(dir, startSec, claimed)).toBeNull();
   });
+
+  // The other half of that guard: nothing in the registry spoke for this
+  // transcript, so the claim has to come from the fallback itself. Two
+  // registry-less candidates in one project — the first takes the transcript,
+  // the second finds it claimed and comes back empty instead of cloning it.
+  test("a fallback pick claims its transcript against the next candidate", () => {
+    const { dir, paths } = project("fallback-claims", {
+      "orphan.jsonl": 10,
+    });
+    const claimed = new Set<string>();
+    expect(__test.claimLatestTranscript(dir, startSec, claimed)).toBe(
+      paths["orphan.jsonl"]!,
+    );
+    expect(__test.claimLatestTranscript(dir, startSec, claimed)).toBeNull();
+  });
+
+  // ...and it takes only what it picked: a second transcript is still there for
+  // the next candidate, so the claim can't starve a project of its own rows.
+  test("a fallback pick leaves the transcripts it did not take", () => {
+    const { dir, paths } = project("fallback-leaves-rest", {
+      "older.jsonl": 10,
+      "newer.jsonl": 20,
+    });
+    const claimed = new Set<string>();
+    expect(__test.claimLatestTranscript(dir, startSec, claimed)).toBe(
+      paths["newer.jsonl"]!,
+    );
+    expect(__test.claimLatestTranscript(dir, startSec, claimed)).toBe(
+      paths["older.jsonl"]!,
+    );
+  });
 });
 
 describe("claude process identification", () => {

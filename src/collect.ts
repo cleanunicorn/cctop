@@ -14,7 +14,8 @@
 //   1. the registry is resolved first, so which transcripts real sessions own is
 //      known before any process without an entry goes looking for one to fall
 //      back to — resolve it later and a helper adopts a live session's
-//      transcript and renders as its duplicate (see latestTranscript's `claimed`)
+//      transcript and renders as its duplicate (see latestTranscript's
+//      `claimed`, which a fallback pick joins as well — claimLatestTranscript)
 //   2. transcripts are then read concurrently (Promise.all)
 //   3. sub-agents are attached sequentially, so sessions sharing a transcript
 //      can't both claim the same agents (see attachSubagentsInOrder)
@@ -49,6 +50,7 @@ import {
   pruneAgentCache,
 } from "./collect/subagents.ts";
 import {
+  claimLatestTranscript,
   type Details,
   latestTranscript,
   noteEntry,
@@ -139,6 +141,7 @@ export const __test = {
   noteEntry,
   describeAssistant,
   latestTranscript,
+  claimLatestTranscript,
   transcriptDetails,
   agentContext,
   liveSubagents,
@@ -227,8 +230,16 @@ export async function collectRows(filter: string | null): Promise<Instance[]> {
       const cwd = s?.cwd ?? cwdOf(p.pid);
       let transcript: string | null = null;
       if (s) transcript = transcriptOf(s);
+      // a fallback pick claims its transcript as well, so two registry-less
+      // processes in the same project can't both land on it and render as
+      // duplicates. The pick runs before this callback's first await, so the
+      // claims still accumulate in candidate order despite the Promise.all.
       else if (cwd)
-        transcript = latestTranscript(projectDir(cwd), p.startSec, claimed);
+        transcript = claimLatestTranscript(
+          projectDir(cwd),
+          p.startSec,
+          claimed,
+        );
       let mtimeMs = 0;
       if (transcript) {
         try {

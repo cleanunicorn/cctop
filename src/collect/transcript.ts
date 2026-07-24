@@ -44,6 +44,21 @@ export function latestTranscript(
   return best?.path ?? null;
 }
 
+// The fallback pick together with the claim that has to follow it: a pick is
+// added to `claimed` too, so a second registry-less process in the same project
+// cannot adopt the same transcript and render as a duplicate of the first. The
+// pair lives here rather than at the call site so the claim can't drift away
+// from the pick — and so the invariant is testable on a temp dir.
+export function claimLatestTranscript(
+  dir: string,
+  startSec: number,
+  claimed: Set<string>,
+) {
+  const path = latestTranscript(dir, startSec, claimed);
+  if (path) claimed.add(path);
+  return path;
+}
+
 export interface Details {
   branch?: string;
   model?: string;
